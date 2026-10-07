@@ -1,0 +1,34 @@
+<main class="prueba">
+  <h1>Prueba de estilos</h1>
+  <p>Texto de ejemplo con el tamaño base de la aplicación.</p>
+
+  <button type="button" class="b b-primary">Videollamada</button>
+  <button type="button" class="b b-secondary">Mensaje</button>
+  <button type="button" class="b b-warning">Pedir ayuda</button>
+  <button type="button" class="b b-danger">EMERGENCIA</button>
+</main>
+
+<router-outlet />
+
+<style>
+  .prueba {
+    max-width: 28rem;
+    margin: 0 auto;
+    padding: var(--space-3);
+  }
+  .b {
+    display: block;
+    width: 100%;
+    min-height: var(--touch-target);
+    margin-bottom: var(--space-2);
+    border: 0;
+    border-radius: var(--radius);
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .b-primary { background: var(--color-primary); color: var(--color-primary-contrast); }
+  .b-secondary { background: var(--color-secondary); color: var(--color-secondary-contrast); }
+  .b-warning { background: var(--color-warning); color: var(--color-warning-contrast); }
+  .b-danger { background: var(--color-danger); color: var(--color-danger-contrast); }
+</style>

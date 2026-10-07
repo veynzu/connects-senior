@@ -1,0 +1,84 @@
+/* Connects Senior - Estilos globales.
+   Colores, tipografia y tamanos: PROPUESTA basada en los mockups UI-1 a UI-9,
+   pendiente de confirmar con los valores reales del diseno. */
+
+:root {
+  /* Colores */
+  --color-primary: #0d4abd;
+  --color-primary-contrast: #ffffff;
+  --color-secondary: #5b4bc4;
+  --color-secondary-contrast: #ffffff;
+  --color-warning: #fbb924;
+  --color-warning-contrast: #1f2937;
+  --color-danger: #e22931;
+  --color-danger-contrast: #ffffff;
+  --color-success: #2e7d52;
+  --color-heading: #01204f;
+  --color-text: #1f2937;
+  --color-background: #f9f9fb;
+  --color-surface: #ffffff;
+
+  /* Tipografia (sin definir en los documentos: se usa la del sistema) */
+  --font-family: system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+  --font-size-base: 1.125rem;
+  --font-size-title: 1.75rem;
+
+  /* Espacios y formas */
+  --space-1: 0.5rem;
+  --space-2: 1rem;
+  --space-3: 1.5rem;
+  --radius: 14px;
+  --touch-target: 3.5rem;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-family);
+  font-size: var(--font-size-base);
+  line-height: 1.5;
+  color: var(--color-text);
+  background: var(--color-background);
+}
+
+h1,
+h2,
+h3 {
+  color: var(--color-heading);
+  line-height: 1.25;
+}
+
+h1 {
+  font-size: var(--font-size-title);
+}
+
+/* Foco siempre visible para quien navega con teclado */
+:focus-visible {
+  outline: 3px solid var(--color-primary);
+  outline-offset: 3px;
+}
+
+/* Texto solo para lectores de pantalla */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
