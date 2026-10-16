@@ -5,10 +5,10 @@ import { Auth } from '../../core/auth';
 import { NavegacionInferior } from '../../shared/navegacion-inferior';
 
 @Component({
-    selector: 'app-panel-principal',
-    imports: [RouterLink, NavegacionInferior],
-    changeDetection: ChangeDetectionStrategy.OnPush,
-    template: `
+  selector: 'app-panel-principal',
+  imports: [RouterLink, NavegacionInferior],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `
     <div class="cabecera"></div>
 
     <main class="panel">
@@ -32,14 +32,10 @@ import { NavegacionInferior } from '../../shared/navegacion-inferior';
           <span class="icono" aria-hidden="true">👥</span>
           Mis contactos
         </a>
-        <button type="button" class="ficha ayuda" disabled>
+        <a class="ficha ayuda" routerLink="/ayuda">
           <span class="icono" aria-hidden="true">🤝</span>
           Pedir ayuda
-        </button>
-        <button type="button" class="ficha emergencia" disabled>
-          <span class="icono" aria-hidden="true">⚠️</span>
-          EMERGENCIA
-        </button>
+        </a>
       </div>
 
       <button type="button" class="salir" (click)="salir()">Cerrar sesión</button>
@@ -47,7 +43,7 @@ import { NavegacionInferior } from '../../shared/navegacion-inferior';
 
     <app-navegacion-inferior />
   `,
-    styles: `
+  styles: `
     .cabecera {
       height: 3rem;
       background: var(--color-primary);
@@ -94,16 +90,9 @@ import { NavegacionInferior } from '../../shared/navegacion-inferior';
       line-height: 1;
     }
     .ayuda {
+      grid-column: 1 / -1;
       background: var(--color-warning);
       color: #1f2937;
-    }
-    .emergencia {
-      background: var(--color-danger);
-      color: #fff;
-    }
-    .ficha:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
     }
     .salir {
       width: 100%;
@@ -120,15 +109,15 @@ import { NavegacionInferior } from '../../shared/navegacion-inferior';
   `,
 })
 export class PanelPrincipal {
-    private readonly auth = inject(Auth);
+  private readonly auth = inject(Auth);
 
-    protected readonly nombre = computed(() => {
-        const usuario = this.auth.usuario();
-        const completo = usuario?.display_name || usuario?.email || '';
-        return completo.split(' ')[0];
-    });
+  protected readonly nombre = computed(() => {
+    const usuario = this.auth.usuario();
+    const completo = usuario?.display_name || usuario?.email || '';
+    return completo.split(' ')[0];
+  });
 
-    protected salir(): void {
-        this.auth.cerrarSesion();
-    }
+  protected salir(): void {
+    this.auth.cerrarSesion();
+  }
 }

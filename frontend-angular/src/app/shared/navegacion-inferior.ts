@@ -3,10 +3,10 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
 
 /** Barra inferior de los mockups UI-2 y UI-4: Inicio, Contactos, Ayuda, Perfil. */
 @Component({
-    selector: 'app-navegacion-inferior',
-    imports: [RouterLink, RouterLinkActive],
-    changeDetection: ChangeDetectionStrategy.OnPush,
-    template: `
+  selector: 'app-navegacion-inferior',
+  imports: [RouterLink, RouterLinkActive],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `
     <nav class="barra" aria-label="Navegación principal">
       <a class="opcion" routerLink="/inicio" routerLinkActive="activa" ariaCurrentWhenActive="page">
         <span class="icono" aria-hidden="true">🏠</span>
@@ -21,17 +21,17 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
         <span class="icono" aria-hidden="true">👥</span>
         Contactos
       </a>
-      <button type="button" class="opcion" disabled>
+      <a class="opcion" routerLink="/ayuda" routerLinkActive="activa" ariaCurrentWhenActive="page">
         <span class="icono" aria-hidden="true">❓</span>
         Ayuda
-      </button>
+      </a>
       <button type="button" class="opcion" disabled>
         <span class="icono" aria-hidden="true">👤</span>
         Perfil
       </button>
     </nav>
   `,
-    styles: `
+  styles: `
     :host {
       position: fixed;
       right: 0;
