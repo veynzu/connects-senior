@@ -1,5 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
+import { RouterLink } from '@angular/router';
 
 import { Auth } from '../../core/auth';
 import { NavegacionInferior } from '../../shared/navegacion-inferior';
@@ -8,10 +9,10 @@ import { Contacto, Contactos } from './contactos';
 type Estado = 'cargando' | 'error' | 'listo';
 
 @Component({
-    selector: 'app-mis-contactos',
-    imports: [NavegacionInferior],
-    changeDetection: ChangeDetectionStrategy.OnPush,
-    template: `
+  selector: 'app-mis-contactos',
+  imports: [RouterLink, NavegacionInferior],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `
     <main class="pagina">
       <h1>Mis contactos</h1>
 
@@ -45,24 +46,24 @@ type Estado = 'cargando' | 'error' | 'listo';
                   </div>
 
                   <div class="acciones">
-                    @if (c.permissions.calls && c.phone) {
+                    @if (c.permissions.calls) {
                       <a
                         class="boton llamar"
-                        [href]="'tel:' + telefono(c)"
+                        [routerLink]="['/llamada', c.id]"
+                        [queryParams]="{ audio: 1 }"
                         [attr.aria-label]="'Llamar a ' + c.first_name"
                       >
                         <span aria-hidden="true">📞</span> Llamar
                       </a>
                     }
                     @if (c.permissions.video_calls) {
-                      <button
-                        type="button"
+                      <a
                         class="boton video"
-                        disabled
+                        [routerLink]="['/llamada', c.id]"
                         [attr.aria-label]="'Videollamada con ' + c.first_name"
                       >
                         <span aria-hidden="true">🎥</span> Videollamada
-                      </button>
+                      </a>
                     }
                   </div>
                 </li>
@@ -74,7 +75,7 @@ type Estado = 'cargando' | 'error' | 'listo';
     </main>
     <app-navegacion-inferior />
   `,
-    styles: `
+  styles: `
     .pagina {
       max-width: 28rem;
       margin: 0 auto;
@@ -149,10 +150,6 @@ type Estado = 'cargando' | 'error' | 'listo';
     .video {
       background: var(--color-secondary);
     }
-    .boton:disabled {
-      opacity: 0.55;
-      cursor: not-allowed;
-    }
     .error {
       padding: var(--space-2);
       border: 2px solid #b3141b;
@@ -175,51 +172,47 @@ type Estado = 'cargando' | 'error' | 'listo';
   `,
 })
 export class MisContactos {
-    private readonly servicio = inject(Contactos);
-    private readonly auth = inject(Auth);
+  private readonly servicio = inject(Contactos);
+  private readonly auth = inject(Auth);
 
-    protected readonly estado = signal<Estado>('cargando');
-    protected readonly contactos = signal<Contacto[]>([]);
-    protected readonly mensajeError = signal('');
+  protected readonly estado = signal<Estado>('cargando');
+  protected readonly contactos = signal<Contacto[]>([]);
+  protected readonly mensajeError = signal('');
 
-    constructor() {
-        this.cargar();
-    }
+  constructor() {
+    this.cargar();
+  }
 
-    protected cargar(): void {
-        this.estado.set('cargando');
-        this.servicio.listar().subscribe({
-            next: (lista) => {
-                this.contactos.set(lista);
-                this.estado.set('listo');
-            },
-            error: (error: HttpErrorResponse) => {
-                if (error.status === 401) {
-                    this.auth.cerrarSesion();
-                    return;
-                }
-                this.mensajeError.set(this.traducirError(error.status));
-                this.estado.set('error');
-            },
-        });
-    }
-
-    protected iniciales(c: Contacto): string {
-        return `${c.first_name.charAt(0)}${c.last_name.charAt(0)}`.toUpperCase();
-    }
-
-    protected telefono(c: Contacto): string {
-        return (c.phone ?? '').replace(/\s+/g, '');
-    }
-
-    private traducirError(estado: number): string {
-        switch (estado) {
-            case 403:
-                return 'No tienes permiso para ver estos contactos.';
-            case 503:
-                return 'El servicio no está disponible ahora. Inténtalo más tarde.';
-            default:
-                return 'No pudimos cargar tus contactos. Revisa tu conexión e inténtalo de nuevo.';
+  protected cargar(): void {
+    this.estado.set('cargando');
+    this.servicio.listar().subscribe({
+      next: (lista) => {
+        this.contactos.set(lista);
+        this.estado.set('listo');
+      },
+      error: (error: HttpErrorResponse) => {
+        if (error.status === 401) {
+          this.auth.cerrarSesion();
+          return;
         }
+        this.mensajeError.set(this.traducirError(error.status));
+        this.estado.set('error');
+      },
+    });
+  }
+
+  protected iniciales(c: Contacto): string {
+    return `${c.first_name.charAt(0)}${c.last_name.charAt(0)}`.toUpperCase();
+  }
+
+  private traducirError(estado: number): string {
+    switch (estado) {
+      case 403:
+        return 'No tienes permiso para ver estos contactos.';
+      case 503:
+        return 'El servicio no está disponible ahora. Inténtalo más tarde.';
+      default:
+        return 'No pudimos cargar tus contactos. Revisa tu conexión e inténtalo de nuevo.';
     }
+  }
 }
