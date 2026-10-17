@@ -24,13 +24,17 @@ import { NavegacionInferior } from '../../shared/navegacion-inferior';
           <span class="icono" aria-hidden="true">🎥</span>
           Videollamada
         </a>
-        <a class="ficha" routerLink="/contactos">
+        <a class="ficha" routerLink="/mensajes">
           <span class="icono" aria-hidden="true">💬</span>
           Mensajes
         </a>
         <a class="ficha" routerLink="/contactos">
           <span class="icono" aria-hidden="true">👥</span>
           Mis contactos
+        </a>
+        <a class="ficha ancha" routerLink="/recordatorios">
+          <span class="icono" aria-hidden="true">⏰</span>
+          Recordatorios
         </a>
         <a class="ficha ayuda" routerLink="/ayuda">
           <span class="icono" aria-hidden="true">🤝</span>
@@ -88,6 +92,9 @@ import { NavegacionInferior } from '../../shared/navegacion-inferior';
     .icono {
       font-size: 2rem;
       line-height: 1;
+    }
+    .ancha {
+      grid-column: 1 / -1;
     }
     .ayuda {
       grid-column: 1 / -1;

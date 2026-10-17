@@ -44,6 +44,9 @@ type Estado = 'cargando' | 'error' | 'listo';
                   <a class="enlace" [routerLink]="['/adultos', a.id, 'recordatorios']">
                     Ver recordatorios
                   </a>
+                  <a class="enlace" [routerLink]="['/adultos', a.id, 'cuidadores', 'nuevo']">
+                    Invitar cuidador
+                  </a>
                 </li>
               }
             </ul>
