@@ -1,17 +1,17 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 
 import { Auth } from '../../core/auth';
 
 type CampoLogin = 'email' | 'password';
 
 @Component({
-    selector: 'app-login',
-    imports: [ReactiveFormsModule],
-    changeDetection: ChangeDetectionStrategy.OnPush,
-    template: `
+  selector: 'app-login',
+  imports: [ReactiveFormsModule, RouterLink],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `
     <header class="encabezado">
       <p class="marca">Connects Senior</p>
     </header>
@@ -72,9 +72,12 @@ type CampoLogin = 'email' | 'password';
           {{ cargando() ? 'Entrando…' : 'Entrar' }}
         </button>
       </form>
+
+      <a class="enlace" routerLink="/recuperar">¿Olvidaste tu contraseña?</a>
+      <a class="enlace" routerLink="/registro">Crear cuenta de familiar</a>
     </main>
   `,
-    styles: `
+  styles: `
     .encabezado {
       padding: var(--space-3);
       background: var(--color-primary);
@@ -158,66 +161,75 @@ type CampoLogin = 'email' | 'password';
       opacity: 0.6;
       cursor: wait;
     }
+    .enlace {
+      display: block;
+      min-height: var(--touch-target);
+      margin-top: var(--space-1);
+      color: var(--color-primary);
+      font-weight: 700;
+      line-height: var(--touch-target);
+      text-align: center;
+    }
   `,
 })
 export class Login {
-    private readonly auth = inject(Auth);
-    private readonly router = inject(Router);
+  private readonly auth = inject(Auth);
+  private readonly router = inject(Router);
 
-    protected readonly formulario = new FormGroup({
-        email: new FormControl('', {
-            nonNullable: true,
-            validators: [Validators.required, Validators.minLength(3), Validators.email],
-        }),
-        password: new FormControl('', {
-            nonNullable: true,
-            validators: [Validators.required, Validators.minLength(6)],
-        }),
+  protected readonly formulario = new FormGroup({
+    email: new FormControl('', {
+      nonNullable: true,
+      validators: [Validators.required, Validators.minLength(3), Validators.email],
+    }),
+    password: new FormControl('', {
+      nonNullable: true,
+      validators: [Validators.required, Validators.minLength(6)],
+    }),
+  });
+
+  protected readonly cargando = signal(false);
+  protected readonly verContrasena = signal(false);
+  protected readonly mensajeError = signal('');
+
+  protected mostrarError(campo: CampoLogin): boolean {
+    const control = this.formulario.controls[campo];
+    return control.invalid && control.touched;
+  }
+
+  protected entrar(): void {
+    this.formulario.markAllAsTouched();
+    if (this.formulario.invalid || this.cargando()) {
+      return;
+    }
+
+    this.cargando.set(true);
+    this.mensajeError.set('');
+    const { email, password } = this.formulario.getRawValue();
+
+    this.auth.login(email.trim(), password).subscribe({
+      next: () => {
+        this.cargando.set(false);
+        this.router.navigateByUrl(this.auth.rutaInicial());
+      },
+      error: (error: HttpErrorResponse) => {
+        this.cargando.set(false);
+        this.mensajeError.set(this.traducirError(error.status));
+      },
     });
+  }
 
-    protected readonly cargando = signal(false);
-    protected readonly verContrasena = signal(false);
-    protected readonly mensajeError = signal('');
-
-    protected mostrarError(campo: CampoLogin): boolean {
-        const control = this.formulario.controls[campo];
-        return control.invalid && control.touched;
+  private traducirError(estado: number): string {
+    switch (estado) {
+      case 401:
+        return 'El correo o la contraseña no son correctos. Revísalos e inténtalo de nuevo.';
+      case 403:
+        return 'Tu cuenta está deshabilitada. Habla con tu familiar responsable.';
+      case 429:
+        return 'Hiciste muchos intentos. Espera unos minutos e inténtalo otra vez.';
+      case 503:
+        return 'El servicio de acceso no está disponible ahora. Inténtalo más tarde.';
+      default:
+        return 'No pudimos conectar con el servidor. Revisa tu conexión e inténtalo de nuevo.';
     }
-
-    protected entrar(): void {
-        this.formulario.markAllAsTouched();
-        if (this.formulario.invalid || this.cargando()) {
-            return;
-        }
-
-        this.cargando.set(true);
-        this.mensajeError.set('');
-        const { email, password } = this.formulario.getRawValue();
-
-        this.auth.login(email.trim(), password).subscribe({
-            next: () => {
-                this.cargando.set(false);
-                this.router.navigateByUrl('/inicio');
-            },
-            error: (error: HttpErrorResponse) => {
-                this.cargando.set(false);
-                this.mensajeError.set(this.traducirError(error.status));
-            },
-        });
-    }
-
-    private traducirError(estado: number): string {
-        switch (estado) {
-            case 401:
-                return 'El correo o la contraseña no son correctos. Revísalos e inténtalo de nuevo.';
-            case 403:
-                return 'Tu cuenta está deshabilitada. Habla con tu familiar responsable.';
-            case 429:
-                return 'Hiciste muchos intentos. Espera unos minutos e inténtalo otra vez.';
-            case 503:
-                return 'El servicio de acceso no está disponible ahora. Inténtalo más tarde.';
-            default:
-                return 'No pudimos conectar con el servidor. Revisa tu conexión e inténtalo de nuevo.';
-        }
-    }
+  }
 }

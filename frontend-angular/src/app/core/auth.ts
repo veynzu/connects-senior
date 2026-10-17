@@ -5,13 +5,17 @@ import { Observable, tap } from 'rxjs';
 
 import { API_BASE_URL } from './api-config';
 
-/* Contrato tomado de backend-fastapi/app/models/auth.py (rama backend) */
+export type Rol = 'adulto_mayor' | 'familiar' | 'cuidador' | 'administrador';
+
+/* Contrato: backend-fastapi/app/models/auth.py (rama backend) + contrato v1.0 */
 export interface UsuarioAutenticado {
     uid: string;
     email: string | null;
     email_verified: boolean | null;
     display_name: string | null;
     photo_url: string | null;
+    /** Contrato v1.0: el backend todavía no lo entrega, por eso puede faltar. */
+    role?: Rol | null;
 }
 
 export interface LoginRequest {
@@ -24,6 +28,14 @@ export interface LoginResponse {
     refresh_token: string;
     expires_in: number;
     user: UsuarioAutenticado;
+}
+
+/** Contrato v1.0, A4: POST /api/auth/register */
+export interface DatosRegistro {
+    first_name: string;
+    last_name: string;
+    email: string;
+    password: string;
 }
 
 interface SesionGuardada {
@@ -51,6 +63,24 @@ export class Auth {
         return this.http
             .post<LoginResponse>(`${API_BASE_URL}/api/auth/login`, cuerpo)
             .pipe(tap((respuesta) => this.guardarSesion(respuesta)));
+    }
+
+    /** POST /api/auth/register (contrato v1.0, A4): crea un usuario familiar e inicia sesión. */
+    registrar(datos: DatosRegistro): Observable<LoginResponse> {
+        return this.http
+            .post<LoginResponse>(`${API_BASE_URL}/api/auth/register`, datos)
+            .pipe(tap((respuesta) => this.guardarSesion(respuesta)));
+    }
+
+    /** POST /api/auth/password-reset (contrato v1.0, A5): responde 204 exista o no el correo. */
+    recuperar(email: string): Observable<void> {
+        return this.http.post<void>(`${API_BASE_URL}/api/auth/password-reset`, { email });
+    }
+
+    /** Pantalla a la que va cada rol después de iniciar sesión. */
+    rutaInicial(): string {
+        const rol = this.usuario()?.role;
+        return rol === 'familiar' || rol === 'cuidador' ? '/familiar' : '/inicio';
     }
 
     estaAutenticado(): boolean {
