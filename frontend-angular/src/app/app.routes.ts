@@ -15,6 +15,9 @@ import { ContactosAdulto } from './features/contactos/contactos-adulto';
 import { DetalleContacto } from './features/contactos/detalle-contacto';
 import { MisContactos } from './features/contactos/mis-contactos';
 import { PanelPrincipal } from './features/contactos/panel-principal';
+import { FormularioRecordatorio } from './features/recordatorios/formulario-recordatorio';
+import { MisRecordatorios } from './features/recordatorios/mis-recordatorios';
+import { RecordatoriosAdulto } from './features/recordatorios/recordatorios-adulto';
 import { ConexionPrueba } from './shared/conexion-prueba';
 
 export const routes: Routes = [
@@ -46,6 +49,22 @@ export const routes: Routes = [
     component: AlertaRecibida,
     canActivate: [authGuard],
   },
+  {
+    path: 'adultos/:adultoId/recordatorios',
+    component: RecordatoriosAdulto,
+    canActivate: [authGuard],
+  },
+  {
+    path: 'adultos/:adultoId/recordatorios/nuevo',
+    component: FormularioRecordatorio,
+    canActivate: [authGuard],
+  },
+  {
+    path: 'adultos/:adultoId/recordatorios/:id/editar',
+    component: FormularioRecordatorio,
+    canActivate: [authGuard],
+  },
+  { path: 'recordatorios', component: MisRecordatorios, canActivate: [authGuard] },
   { path: 'contactos', component: MisContactos, canActivate: [authGuard] },
   { path: 'ayuda', component: SolicitarAyuda, canActivate: [authGuard] },
   { path: 'llamada/:id', component: Llamada, canActivate: [authGuard] },
