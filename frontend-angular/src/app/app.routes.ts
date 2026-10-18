@@ -1,6 +1,7 @@
 import { Routes } from '@angular/router';
 
 import { authGuard } from './core/auth-guard';
+import { UsuariosAdmin } from './features/admin/usuarios';
 import { AlertaRecibida } from './features/ayuda/alerta-recibida';
 import { SolicitarAyuda } from './features/ayuda/solicitar-ayuda';
 import { Solicitudes } from './features/ayuda/solicitudes';
@@ -31,6 +32,7 @@ export const routes: Routes = [
   { path: 'recuperar', component: Recuperar },
   { path: 'inicio', component: PanelPrincipal, canActivate: [authGuard] },
   { path: 'familiar', component: PanelFamiliar, canActivate: [authGuard] },
+  { path: 'admin', component: UsuariosAdmin, canActivate: [authGuard] },
   { path: 'perfil', component: Perfil, canActivate: [authGuard] },
   { path: 'adultos/nuevo', component: RegistrarAdulto, canActivate: [authGuard] },
   { path: 'adultos/:adultoId/contactos', component: ContactosAdulto, canActivate: [authGuard] },

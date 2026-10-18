@@ -5,11 +5,12 @@ import { RouterLink } from '@angular/router';
 import { Observable } from 'rxjs';
 
 import { API_BASE_URL } from '../../core/api-config';
-import { Auth } from '../../core/auth';
+import { Auth, UsuarioAutenticado } from '../../core/auth';
 
 /*
  * Contrato v1.0, A6: PATCH /api/auth/me
  * Entrada: first_name, last_name, phone, photo_url (todos opcionales).
+ * Salida: objeto user actualizado.
  * Este endpoint todavía NO existe en el backend.
  */
 export interface CambiosPerfil {
@@ -22,8 +23,8 @@ export interface CambiosPerfil {
 export class Perfiles {
     private readonly http = inject(HttpClient);
 
-    actualizar(cambios: CambiosPerfil): Observable<unknown> {
-        return this.http.patch<unknown>(`${API_BASE_URL}/api/auth/me`, cambios);
+    actualizar(cambios: CambiosPerfil): Observable<Partial<UsuarioAutenticado>> {
+        return this.http.patch<Partial<UsuarioAutenticado>>(`${API_BASE_URL}/api/auth/me`, cambios);
     }
 }
 
@@ -95,9 +96,7 @@ const ETIQUETAS_ROL: Record<string, string> = {
           <p class="error-general" role="alert">{{ error() }}</p>
         }
         @if (guardado()) {
-          <p class="confirmacion" role="status">
-            Datos guardados. Verás el nombre nuevo la próxima vez que inicies sesión.
-          </p>
+          <p class="confirmacion" role="status">Datos guardados.</p>
         }
 
         <button type="submit" class="entrar" [disabled]="guardando()">
@@ -164,7 +163,10 @@ export class Perfil {
         this.guardando.set(true);
         this.error.set('');
         this.servicio.actualizar(cambios).subscribe({
-            next: () => {
+            next: (usuario) => {
+                if (typeof usuario?.display_name === 'string') {
+                    this.auth.actualizarUsuario({ display_name: usuario.display_name });
+                }
                 this.formulario.reset();
                 this.guardando.set(false);
                 this.guardado.set(true);

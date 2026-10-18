@@ -80,7 +80,19 @@ export class Auth {
     /** Pantalla a la que va cada rol después de iniciar sesión. */
     rutaInicial(): string {
         const rol = this.usuario()?.role;
+        if (rol === 'administrador') {
+            return '/admin';
+        }
         return rol === 'familiar' || rol === 'cuidador' ? '/familiar' : '/inicio';
+    }
+
+    /** Actualiza datos del usuario guardado (por ejemplo, después de editar el perfil). */
+    actualizarUsuario(cambios: Partial<UsuarioAutenticado>): void {
+        const actual = this.sesion();
+        if (!actual) {
+            return;
+        }
+        this.persistirSesion({ ...actual, usuario: { ...actual.usuario, ...cambios } });
     }
 
     estaAutenticado(): boolean {
@@ -101,12 +113,15 @@ export class Auth {
     }
 
     private guardarSesion(respuesta: LoginResponse): void {
-        const nueva: SesionGuardada = {
+        this.persistirSesion({
             idToken: respuesta.id_token,
             refreshToken: respuesta.refresh_token,
             expiraEn: Date.now() + respuesta.expires_in * 1000,
             usuario: respuesta.user,
-        };
+        });
+    }
+
+    private persistirSesion(nueva: SesionGuardada): void {
         this.sesion.set(nueva);
         try {
             localStorage.setItem(CLAVE_SESION, JSON.stringify(nueva));
