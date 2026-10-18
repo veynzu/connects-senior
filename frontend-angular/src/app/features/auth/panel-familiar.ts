@@ -8,11 +8,11 @@ import { Adulto, Adultos } from './adultos';
 type Estado = 'cargando' | 'error' | 'listo';
 
 @Component({
-    selector: 'app-panel-familiar',
-    imports: [RouterLink],
-    changeDetection: ChangeDetectionStrategy.OnPush,
-    styleUrl: '../../shared/formulario.css',
-    template: `
+  selector: 'app-panel-familiar',
+  imports: [RouterLink],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  styleUrl: '../../shared/formulario.css',
+  template: `
     <main class="pagina">
       <h1>Hola, {{ nombre() }}</h1>
       <p>Tus adultos mayores</p>
@@ -55,51 +55,52 @@ type Estado = 'cargando' | 'error' | 'listo';
       }
 
       <a class="entrar" routerLink="/adultos/nuevo">Registrar adulto mayor</a>
+      <a class="entrar secundario" routerLink="/perfil">Mi perfil</a>
       <button type="button" class="entrar secundario" (click)="salir()">Cerrar sesión</button>
     </main>
   `,
 })
 export class PanelFamiliar {
-    private readonly auth = inject(Auth);
-    private readonly adultos = inject(Adultos);
+  private readonly auth = inject(Auth);
+  private readonly adultos = inject(Adultos);
 
-    protected readonly estado = signal<Estado>('cargando');
-    protected readonly lista = signal<Adulto[]>([]);
-    protected readonly mensajeError = signal('');
+  protected readonly estado = signal<Estado>('cargando');
+  protected readonly lista = signal<Adulto[]>([]);
+  protected readonly mensajeError = signal('');
 
-    protected readonly nombre = computed(() => {
-        const usuario = this.auth.usuario();
-        const completo = usuario?.display_name || usuario?.email || '';
-        return completo.split(' ')[0];
+  protected readonly nombre = computed(() => {
+    const usuario = this.auth.usuario();
+    const completo = usuario?.display_name || usuario?.email || '';
+    return completo.split(' ')[0];
+  });
+
+  constructor() {
+    this.cargar();
+  }
+
+  protected cargar(): void {
+    this.estado.set('cargando');
+    this.adultos.listar().subscribe({
+      next: (adultos) => {
+        this.lista.set(adultos);
+        this.estado.set('listo');
+      },
+      error: (error: HttpErrorResponse) => {
+        if (error.status === 401) {
+          this.auth.cerrarSesion();
+          return;
+        }
+        this.mensajeError.set(
+          error.status === 403
+            ? 'No tienes permiso para ver esta información.'
+            : 'No pudimos cargar tus adultos mayores. Revisa tu conexión e inténtalo de nuevo.',
+        );
+        this.estado.set('error');
+      },
     });
+  }
 
-    constructor() {
-        this.cargar();
-    }
-
-    protected cargar(): void {
-        this.estado.set('cargando');
-        this.adultos.listar().subscribe({
-            next: (adultos) => {
-                this.lista.set(adultos);
-                this.estado.set('listo');
-            },
-            error: (error: HttpErrorResponse) => {
-                if (error.status === 401) {
-                    this.auth.cerrarSesion();
-                    return;
-                }
-                this.mensajeError.set(
-                    error.status === 403
-                        ? 'No tienes permiso para ver esta información.'
-                        : 'No pudimos cargar tus adultos mayores. Revisa tu conexión e inténtalo de nuevo.',
-                );
-                this.estado.set('error');
-            },
-        });
-    }
-
-    protected salir(): void {
-        this.auth.cerrarSesion();
-    }
+  protected salir(): void {
+    this.auth.cerrarSesion();
+  }
 }

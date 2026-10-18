@@ -25,10 +25,10 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
         <span class="icono" aria-hidden="true">❓</span>
         Ayuda
       </a>
-      <button type="button" class="opcion" disabled>
+      <a class="opcion" routerLink="/perfil" routerLinkActive="activa" ariaCurrentWhenActive="page">
         <span class="icono" aria-hidden="true">👤</span>
         Perfil
-      </button>
+      </a>
     </nav>
   `,
   styles: `
@@ -70,10 +70,6 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
     .opcion.activa {
       color: var(--color-primary);
       font-weight: 700;
-    }
-    .opcion:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
     }
   `,
 })

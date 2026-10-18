@@ -6,6 +6,7 @@ import { SolicitarAyuda } from './features/ayuda/solicitar-ayuda';
 import { Solicitudes } from './features/ayuda/solicitudes';
 import { InvitarCuidador } from './features/auth/invitar-cuidador';
 import { PanelFamiliar } from './features/auth/panel-familiar';
+import { Perfil } from './features/auth/perfil';
 import { Login } from './features/auth/login';
 import { Recuperar } from './features/auth/recuperar';
 import { RegistrarAdulto } from './features/auth/registrar-adulto';
@@ -29,6 +30,7 @@ export const routes: Routes = [
   { path: 'recuperar', component: Recuperar },
   { path: 'inicio', component: PanelPrincipal, canActivate: [authGuard] },
   { path: 'familiar', component: PanelFamiliar, canActivate: [authGuard] },
+  { path: 'perfil', component: Perfil, canActivate: [authGuard] },
   { path: 'adultos/nuevo', component: RegistrarAdulto, canActivate: [authGuard] },
   { path: 'adultos/:adultoId/contactos', component: ContactosAdulto, canActivate: [authGuard] },
   {
