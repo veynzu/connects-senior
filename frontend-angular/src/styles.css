@@ -10,7 +10,9 @@
   --color-secondary-contrast: #ffffff;
   --color-warning: #fbb924;
   --color-warning-contrast: #1f2937;
-  --color-danger: #e22931;
+  /* Rojo oscurecido (antes #e22931): con el original, el texto de error sobre
+     el fondo de la pagina daba contraste 4.3, menos del minimo AA de 4.5. */
+  --color-danger: #c21f26;
   --color-danger-contrast: #ffffff;
   --color-success: #2e7d52;
   --color-heading: #01204f;
@@ -37,6 +39,11 @@
   box-sizing: border-box;
 }
 
+/* Respeta el tamano de letra que el usuario eligio en su navegador */
+html {
+  font-size: 100%;
+}
+
 body {
   margin: 0;
   font-family: var(--font-family);
@@ -57,10 +64,12 @@ h1 {
   font-size: var(--font-size-title);
 }
 
-/* Foco siempre visible para quien navega con teclado */
+/* Foco siempre visible para quien navega con teclado.
+   El anillo blanco exterior lo mantiene visible tambien sobre fondos azules. */
 :focus-visible {
   outline: 3px solid var(--color-primary);
   outline-offset: 3px;
+  box-shadow: 0 0 0 6px #ffffff;
 }
 
 /* Texto solo para lectores de pantalla */
