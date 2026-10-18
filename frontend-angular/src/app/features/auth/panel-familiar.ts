@@ -38,6 +38,9 @@ type Estado = 'cargando' | 'error' | 'listo';
                   <a class="enlace" [routerLink]="['/adultos', a.id, 'contactos']">
                     Ver contactos
                   </a>
+                  <a class="enlace" [routerLink]="['/adultos', a.id, 'favoritos']">
+                    Contactos favoritos
+                  </a>
                   <a class="enlace" [routerLink]="['/adultos', a.id, 'solicitudes']">
                     Ver solicitudes
                   </a>

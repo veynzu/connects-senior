@@ -15,6 +15,7 @@ import { Llamada } from './features/comunicacion/llamada';
 import { AgregarContacto } from './features/contactos/agregar-contacto';
 import { ContactosAdulto } from './features/contactos/contactos-adulto';
 import { DetalleContacto } from './features/contactos/detalle-contacto';
+import { FavoritosAdulto } from './features/contactos/favoritos-adulto';
 import { MisContactos } from './features/contactos/mis-contactos';
 import { PanelPrincipal } from './features/contactos/panel-principal';
 import { Conversacion } from './features/mensajes/conversacion';
@@ -48,6 +49,7 @@ export const routes: Routes = [
     component: DetalleContacto,
     canActivate: [authGuard],
   },
+  { path: 'adultos/:adultoId/favoritos', component: FavoritosAdulto, canActivate: [authGuard] },
   { path: 'adultos/:adultoId/solicitudes', component: Solicitudes, canActivate: [authGuard] },
   {
     path: 'adultos/:adultoId/solicitudes/:id',
