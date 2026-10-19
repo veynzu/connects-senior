@@ -12,21 +12,21 @@ const SEGUNDOS_CUENTA = 5;
 type Paso = 'categoria' | 'ubicacion' | 'cuenta' | 'enviando' | 'enviada' | 'error';
 
 interface OpcionAyuda {
-    valor: CategoriaAyuda;
-    texto: string;
-    icono: string;
+  valor: CategoriaAyuda;
+  texto: string;
+  icono: string;
 }
 
 interface Ubicacion {
-    latitude: number;
-    longitude: number;
+  latitude: number;
+  longitude: number;
 }
 
 @Component({
-    selector: 'app-solicitar-ayuda',
-    imports: [RouterLink, NavegacionInferior],
-    changeDetection: ChangeDetectionStrategy.OnPush,
-    template: `
+  selector: 'app-solicitar-ayuda',
+  imports: [RouterLink, NavegacionInferior],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `
     <main class="pagina">
       @switch (paso()) {
         @case ('categoria') {
@@ -34,7 +34,7 @@ interface Ubicacion {
           <p>Tus contactos de confianza recibirán una solicitud para ayudarte.</p>
 
           <fieldset class="categorias">
-            <legend class="sr-only">¿Qué tipo de ayuda necesitas?</legend>
+            <legend class="sr-only">¿Qué tipo de ayuda necesitas? (obligatorio)</legend>
             @for (op of opciones; track op.valor) {
               <label class="opcion" [class.elegida]="categoria() === op.valor">
                 <input
@@ -43,7 +43,7 @@ interface Ubicacion {
                   name="categoria"
                   [value]="op.valor"
                   [checked]="categoria() === op.valor"
-                  (change)="categoria.set(op.valor)"
+                  (change)="elegirCategoria(op.valor)"
                 />
                 <span class="circulo" aria-hidden="true">{{ op.icono }}</span>
                 <span class="texto">{{ op.texto }}</span>
@@ -54,7 +54,11 @@ interface Ubicacion {
             }
           </fieldset>
 
-          <button type="button" class="boton amarillo" (click)="paso.set('ubicacion')">
+          @if (errorCategoria()) {
+            <p class="error" role="alert">Elige qué necesitas antes de pedir ayuda.</p>
+          }
+
+          <button type="button" class="boton amarillo" (click)="continuar()">
             Enviar solicitud de ayuda
           </button>
         }
@@ -168,7 +172,7 @@ interface Ubicacion {
 
     <app-navegacion-inferior />
   `,
-    styles: `
+  styles: `
     .pagina {
       max-width: 28rem;
       margin: 0 auto;
@@ -314,151 +318,167 @@ interface Ubicacion {
   `,
 })
 export class SolicitarAyuda {
-    private readonly alertas = inject(Alertas);
-    private readonly auth = inject(Auth);
+  private readonly alertas = inject(Alertas);
+  private readonly auth = inject(Auth);
 
-    /* Categorías acordadas con el equipo a partir del mockup UI-7. */
-    protected readonly opciones: readonly OpcionAyuda[] = [
-        { valor: 'ayuda_en_casa', texto: 'Necesito ayuda en casa', icono: '🏠' },
-        { valor: 'compania', texto: 'Necesito compañía', icono: '👥' },
-        { valor: 'problema', texto: 'Tengo un problema', icono: '⚠️' },
-        { valor: 'otro', texto: 'Otro', icono: '⋯' },
-    ];
+  /* Categorías acordadas con el equipo a partir del mockup UI-7. */
+  protected readonly opciones: readonly OpcionAyuda[] = [
+    { valor: 'ayuda_en_casa', texto: 'Necesito ayuda en casa', icono: '🏠' },
+    { valor: 'compania', texto: 'Necesito compañía', icono: '👥' },
+    { valor: 'problema', texto: 'Tengo un problema', icono: '⚠️' },
+    { valor: 'otro', texto: 'Otro', icono: '⋯' },
+  ];
 
-    protected readonly totalSegundos = SEGUNDOS_CUENTA;
-    protected readonly paso = signal<Paso>('categoria');
-    protected readonly categoria = signal<CategoriaAyuda | null>(null);
-    protected readonly ubicacion = signal<Ubicacion | null>(null);
-    protected readonly buscandoUbicacion = signal(false);
-    protected readonly segundos = signal(SEGUNDOS_CUENTA);
-    protected readonly solicitud = signal<SolicitudAyuda | null>(null);
-    protected readonly mensajeError = signal('');
+  protected readonly totalSegundos = SEGUNDOS_CUENTA;
+  protected readonly paso = signal<Paso>('categoria');
+  protected readonly categoria = signal<CategoriaAyuda | null>(null);
+  /* Decisión del equipo: la categoría es obligatoria en la pantalla (el backend la acepta como opcional). */
+  protected readonly errorCategoria = signal(false);
+  protected readonly ubicacion = signal<Ubicacion | null>(null);
+  protected readonly buscandoUbicacion = signal(false);
+  protected readonly segundos = signal(SEGUNDOS_CUENTA);
+  protected readonly solicitud = signal<SolicitudAyuda | null>(null);
+  protected readonly mensajeError = signal('');
 
-    private temporizador: ReturnType<typeof setInterval> | undefined;
+  private temporizador: ReturnType<typeof setInterval> | undefined;
 
-    constructor() {
-        inject(DestroyRef).onDestroy(() => this.detenerTemporizador());
+  constructor() {
+    inject(DestroyRef).onDestroy(() => this.detenerTemporizador());
+  }
+
+  protected elegirCategoria(valor: CategoriaAyuda): void {
+    this.categoria.set(valor);
+    this.errorCategoria.set(false);
+  }
+
+  protected continuar(): void {
+    if (!this.categoria()) {
+      this.errorCategoria.set(true);
+      return;
     }
+    this.errorCategoria.set(false);
+    this.paso.set('ubicacion');
+  }
 
-    protected permitirUbicacion(): void {
-        if (!('geolocation' in navigator)) {
-            this.sinUbicacion();
-            return;
-        }
-        this.buscandoUbicacion.set(true);
-        navigator.geolocation.getCurrentPosition(
-            (posicion) => {
-                this.ubicacion.set({
-                    latitude: posicion.coords.latitude,
-                    longitude: posicion.coords.longitude,
-                });
-                this.buscandoUbicacion.set(false);
-                this.iniciarCuenta();
-            },
-            () => {
-                /* RF-23: si no se autoriza o no se puede obtener, la solicitud se envía igual. */
-                this.buscandoUbicacion.set(false);
-                this.sinUbicacion();
-            },
-            { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 },
-        );
+  protected permitirUbicacion(): void {
+    if (!('geolocation' in navigator)) {
+      this.sinUbicacion();
+      return;
     }
-
-    protected sinUbicacion(): void {
-        this.ubicacion.set(null);
-        this.iniciarCuenta();
-    }
-
-    protected cancelar(): void {
-        this.detenerTemporizador();
-        this.ubicacion.set(null);
-        this.paso.set('categoria');
-    }
-
-    protected enviar(): void {
-        this.paso.set('enviando');
-
-        const cuerpo: NuevaSolicitud = {};
-        const categoria = this.categoria();
-        if (categoria) {
-            cuerpo.category = categoria;
-        }
-        const ubicacion = this.ubicacion();
-        if (ubicacion) {
-            cuerpo.latitude = ubicacion.latitude;
-            cuerpo.longitude = ubicacion.longitude;
-        }
-
-        this.alertas.crear(cuerpo).subscribe({
-            next: (respuesta) => {
-                this.solicitud.set(respuesta);
-                this.paso.set('enviada');
-            },
-            error: (error: HttpErrorResponse) => {
-                if (error.status === 401) {
-                    this.auth.cerrarSesion();
-                    return;
-                }
-                this.mensajeError.set(this.traducirError(error.status));
-                this.paso.set('error');
-            },
+    this.buscandoUbicacion.set(true);
+    navigator.geolocation.getCurrentPosition(
+      (posicion) => {
+        this.ubicacion.set({
+          latitude: posicion.coords.latitude,
+          longitude: posicion.coords.longitude,
         });
+        this.buscandoUbicacion.set(false);
+        this.iniciarCuenta();
+      },
+      () => {
+        /* RF-23: si no se autoriza o no se puede obtener, la solicitud se envía igual. */
+        this.buscandoUbicacion.set(false);
+        this.sinUbicacion();
+      },
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 },
+    );
+  }
+
+  protected sinUbicacion(): void {
+    this.ubicacion.set(null);
+    this.iniciarCuenta();
+  }
+
+  protected cancelar(): void {
+    this.detenerTemporizador();
+    this.ubicacion.set(null);
+    this.paso.set('categoria');
+  }
+
+  protected enviar(): void {
+    this.paso.set('enviando');
+
+    const cuerpo: NuevaSolicitud = {};
+    const categoria = this.categoria();
+    if (categoria) {
+      cuerpo.category = categoria;
+    }
+    const ubicacion = this.ubicacion();
+    if (ubicacion) {
+      cuerpo.latitude = ubicacion.latitude;
+      cuerpo.longitude = ubicacion.longitude;
     }
 
-    protected fecha(): string {
-        const solicitud = this.solicitud();
-        return solicitud ? new Date(solicitud.created_at).toLocaleDateString('es-CO') : '';
-    }
+    this.alertas.crear(cuerpo).subscribe({
+      next: (respuesta) => {
+        this.solicitud.set(respuesta);
+        this.paso.set('enviada');
+      },
+      error: (error: HttpErrorResponse) => {
+        if (error.status === 401) {
+          this.auth.cerrarSesion();
+          return;
+        }
+        this.mensajeError.set(this.traducirError(error.status));
+        this.paso.set('error');
+      },
+    });
+  }
 
-    protected hora(): string {
-        const solicitud = this.solicitud();
-        return solicitud
-            ? new Date(solicitud.created_at).toLocaleTimeString('es-CO', {
-                hour: '2-digit',
-                minute: '2-digit',
-            })
-            : '';
-    }
+  protected fecha(): string {
+    const solicitud = this.solicitud();
+    return solicitud ? new Date(solicitud.created_at).toLocaleDateString('es-CO') : '';
+  }
 
-    protected estadoTexto(): string {
-        const estados: Record<string, string> = {
-            pendiente: 'Pendiente',
-            en_atencion: 'En atención',
-            atendida: 'Atendida',
-        };
-        const estado = this.solicitud()?.status ?? '';
-        return estados[estado] ?? estado;
-    }
+  protected hora(): string {
+    const solicitud = this.solicitud();
+    return solicitud
+      ? new Date(solicitud.created_at).toLocaleTimeString('es-CO', {
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+      : '';
+  }
 
-    private iniciarCuenta(): void {
+  protected estadoTexto(): string {
+    const estados: Record<string, string> = {
+      pendiente: 'Pendiente',
+      en_atencion: 'En atención',
+      atendida: 'Atendida',
+    };
+    const estado = this.solicitud()?.status ?? '';
+    return estados[estado] ?? estado;
+  }
+
+  private iniciarCuenta(): void {
+    this.detenerTemporizador();
+    this.segundos.set(SEGUNDOS_CUENTA);
+    this.paso.set('cuenta');
+    this.temporizador = setInterval(() => {
+      const restante = this.segundos() - 1;
+      this.segundos.set(restante);
+      if (restante <= 0) {
         this.detenerTemporizador();
-        this.segundos.set(SEGUNDOS_CUENTA);
-        this.paso.set('cuenta');
-        this.temporizador = setInterval(() => {
-            const restante = this.segundos() - 1;
-            this.segundos.set(restante);
-            if (restante <= 0) {
-                this.detenerTemporizador();
-                this.enviar();
-            }
-        }, 1000);
-    }
+        this.enviar();
+      }
+    }, 1000);
+  }
 
-    private detenerTemporizador(): void {
-        if (this.temporizador !== undefined) {
-            clearInterval(this.temporizador);
-            this.temporizador = undefined;
-        }
+  private detenerTemporizador(): void {
+    if (this.temporizador !== undefined) {
+      clearInterval(this.temporizador);
+      this.temporizador = undefined;
     }
+  }
 
-    private traducirError(estado: number): string {
-        switch (estado) {
-            case 403:
-                return 'Tu cuenta no tiene permiso para enviar solicitudes de ayuda.';
-            case 503:
-                return 'El servicio no está disponible ahora. Si es urgente, llama a un contacto.';
-            default:
-                return 'No pudimos enviar tu solicitud. Revisa tu conexión e inténtalo de nuevo. Si es urgente, llama a un contacto.';
-        }
+  private traducirError(estado: number): string {
+    switch (estado) {
+      case 403:
+        return 'Tu cuenta no tiene permiso para enviar solicitudes de ayuda.';
+      case 503:
+        return 'El servicio no está disponible ahora. Si es urgente, llama a un contacto.';
+      default:
+        return 'No pudimos enviar tu solicitud. Revisa tu conexión e inténtalo de nuevo. Si es urgente, llama a un contacto.';
     }
+  }
 }
