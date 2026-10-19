@@ -1,6 +1,9 @@
+import { environment } from '../../environments/environment';
+
 /**
  * URL base del backend (FastAPI).
- * PROPUESTA para desarrollo: el backend corre en el puerto 8000.
- * La URL de producción no está definida en los documentos del proyecto.
+ * - Desarrollo (ng serve, ng build --configuration development): http://127.0.0.1:8000, porque
+ *   angular.json reemplaza environment.ts por environment.development.ts (fileReplacements).
+ * - Producción (ng build): el backend desplegado en Cloud Run.
  */
-export const API_BASE_URL = 'http://127.0.0.1:8000';
+export const API_BASE_URL = environment.apiBaseUrl;

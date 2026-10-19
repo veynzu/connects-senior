@@ -45,3 +45,6 @@ CLAUDE.local.md
 # Documentos y notas locales (orden de Andres, 2026-10-18): ningun .md ni la carpeta docs/ se suben
 *.md
 docs/
+
+# Cache local de Firebase Hosting (se crea al desplegar el front)
+.firebase/
