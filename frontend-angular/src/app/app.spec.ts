@@ -1,3 +1,4 @@
+import { provideHttpClient } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { App } from './app';
 
@@ -5,6 +6,8 @@ describe('App', () => {
   beforeEach(async () => {
     await TestBed.configureTestingModule({
       imports: [App],
+      // App usa Auth (para mostrar la cabecera con la campana) y Auth necesita HttpClient.
+      providers: [provideHttpClient()],
     }).compileComponents();
   });
 

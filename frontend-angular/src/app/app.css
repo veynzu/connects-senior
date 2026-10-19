@@ -1,0 +1,31 @@
+:host {
+  display: block;
+}
+
+/* Cabecera superior con la campana. Es "sticky": ocupa su propio espacio arriba, así que
+   no tapa los títulos de las pantallas y no hace falta sumarles relleno superior. */
+.barra-superior {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+}
+
+.interior {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  max-width: 28rem;
+  min-height: 4rem;
+  margin: 0 auto;
+  padding: 0.25rem var(--space-1) 0.25rem var(--space-3);
+}
+
+.marca {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
