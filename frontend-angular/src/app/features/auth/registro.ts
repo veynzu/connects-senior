@@ -4,15 +4,16 @@ import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angula
 import { Router, RouterLink } from '@angular/router';
 
 import { Auth } from '../../core/auth';
+import { correoDuplicado } from '../../core/errores';
 
 type Campo = 'first_name' | 'last_name' | 'email' | 'password' | 'repetir';
 
 @Component({
-    selector: 'app-registro',
-    imports: [ReactiveFormsModule, RouterLink],
-    changeDetection: ChangeDetectionStrategy.OnPush,
-    styleUrl: '../../shared/formulario.css',
-    template: `
+  selector: 'app-registro',
+  imports: [ReactiveFormsModule, RouterLink],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  styleUrl: '../../shared/formulario.css',
+  template: `
     <main class="pagina">
       <h1>Crear cuenta de familiar</h1>
       <p>Con esta cuenta podrás registrar y acompañar a tu adulto mayor.</p>
@@ -110,82 +111,83 @@ type Campo = 'first_name' | 'last_name' | 'email' | 'password' | 'repetir';
   `,
 })
 export class Registro {
-    private readonly auth = inject(Auth);
-    private readonly router = inject(Router);
+  private readonly auth = inject(Auth);
+  private readonly router = inject(Router);
 
-    protected readonly formulario = new FormGroup({
-        first_name: new FormControl('', { nonNullable: true, validators: [Validators.required] }),
-        last_name: new FormControl('', { nonNullable: true, validators: [Validators.required] }),
-        email: new FormControl('', {
-            nonNullable: true,
-            validators: [Validators.required, Validators.minLength(3), Validators.email],
-        }),
-        password: new FormControl('', {
-            nonNullable: true,
-            validators: [Validators.required, Validators.minLength(6)],
-        }),
-        repetir: new FormControl('', { nonNullable: true, validators: [Validators.required] }),
-    });
+  protected readonly formulario = new FormGroup({
+    first_name: new FormControl('', { nonNullable: true, validators: [Validators.required] }),
+    last_name: new FormControl('', { nonNullable: true, validators: [Validators.required] }),
+    email: new FormControl('', {
+      nonNullable: true,
+      validators: [Validators.required, Validators.minLength(3), Validators.email],
+    }),
+    password: new FormControl('', {
+      nonNullable: true,
+      validators: [Validators.required, Validators.minLength(6)],
+    }),
+    repetir: new FormControl('', { nonNullable: true, validators: [Validators.required] }),
+  });
 
-    protected readonly cargando = signal(false);
-    protected readonly mensajeError = signal('');
+  protected readonly cargando = signal(false);
+  protected readonly mensajeError = signal('');
 
-    protected mostrarError(campo: Campo): boolean {
-        const control = this.formulario.controls[campo];
-        return control.invalid && control.touched;
+  protected mostrarError(campo: Campo): boolean {
+    const control = this.formulario.controls[campo];
+    return control.invalid && control.touched;
+  }
+
+  protected mostrarErrorRepetir(): boolean {
+    const control = this.formulario.controls.repetir;
+    return control.touched && (control.invalid || !this.coinciden());
+  }
+
+  protected crear(): void {
+    this.formulario.markAllAsTouched();
+    if (this.formulario.invalid || !this.coinciden() || this.cargando()) {
+      return;
     }
 
-    protected mostrarErrorRepetir(): boolean {
-        const control = this.formulario.controls.repetir;
-        return control.touched && (control.invalid || !this.coinciden());
+    this.cargando.set(true);
+    this.mensajeError.set('');
+    const { first_name, last_name, email, password } = this.formulario.getRawValue();
+
+    this.auth
+      .registrar({
+        first_name: first_name.trim(),
+        last_name: last_name.trim(),
+        email: email.trim(),
+        password,
+      })
+      .subscribe({
+        next: () => {
+          this.cargando.set(false);
+          this.router.navigateByUrl('/familiar');
+        },
+        error: (error: HttpErrorResponse) => {
+          this.cargando.set(false);
+          this.mensajeError.set(this.traducirError(error));
+        },
+      });
+  }
+
+  private coinciden(): boolean {
+    const { password, repetir } = this.formulario.getRawValue();
+    return password === repetir;
+  }
+
+  private traducirError(error: HttpErrorResponse): string {
+    if (correoDuplicado(error)) {
+      return 'Ya existe una cuenta con ese correo. Prueba iniciar sesión.';
     }
-
-    protected crear(): void {
-        this.formulario.markAllAsTouched();
-        if (this.formulario.invalid || !this.coinciden() || this.cargando()) {
-            return;
-        }
-
-        this.cargando.set(true);
-        this.mensajeError.set('');
-        const { first_name, last_name, email, password } = this.formulario.getRawValue();
-
-        this.auth
-            .registrar({
-                first_name: first_name.trim(),
-                last_name: last_name.trim(),
-                email: email.trim(),
-                password,
-            })
-            .subscribe({
-                next: () => {
-                    this.cargando.set(false);
-                    this.router.navigateByUrl('/familiar');
-                },
-                error: (error: HttpErrorResponse) => {
-                    this.cargando.set(false);
-                    this.mensajeError.set(this.traducirError(error.status));
-                },
-            });
+    switch (error.status) {
+      case 422:
+        return 'Revisa los datos: alguno no es válido.';
+      case 429:
+        return 'Hiciste muchos intentos. Espera unos minutos e inténtalo otra vez.';
+      case 503:
+        return 'El servicio no está disponible ahora. Inténtalo más tarde.';
+      default:
+        return 'No pudimos conectar con el servidor. Revisa tu conexión e inténtalo de nuevo.';
     }
-
-    private coinciden(): boolean {
-        const { password, repetir } = this.formulario.getRawValue();
-        return password === repetir;
-    }
-
-    private traducirError(estado: number): string {
-        switch (estado) {
-            case 409:
-                return 'Ya existe una cuenta con ese correo. Prueba iniciar sesión.';
-            case 422:
-                return 'Revisa los datos: alguno no es válido.';
-            case 429:
-                return 'Hiciste muchos intentos. Espera unos minutos e inténtalo otra vez.';
-            case 503:
-                return 'El servicio no está disponible ahora. Inténtalo más tarde.';
-            default:
-                return 'No pudimos conectar con el servidor. Revisa tu conexión e inténtalo de nuevo.';
-        }
-    }
+  }
 }

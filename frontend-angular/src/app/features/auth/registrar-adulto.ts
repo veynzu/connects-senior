@@ -4,16 +4,17 @@ import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angula
 import { Router, RouterLink } from '@angular/router';
 
 import { Auth } from '../../core/auth';
+import { correoDuplicado } from '../../core/errores';
 import { Adultos, NuevoAdulto } from './adultos';
 
 type Campo = 'first_name' | 'last_name' | 'email' | 'password';
 
 @Component({
-    selector: 'app-registrar-adulto',
-    imports: [ReactiveFormsModule, RouterLink],
-    changeDetection: ChangeDetectionStrategy.OnPush,
-    styleUrl: '../../shared/formulario.css',
-    template: `
+  selector: 'app-registrar-adulto',
+  imports: [ReactiveFormsModule, RouterLink],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  styleUrl: '../../shared/formulario.css',
+  template: `
     <main class="pagina">
       <h1>Registrar adulto mayor</h1>
 
@@ -111,88 +112,89 @@ type Campo = 'first_name' | 'last_name' | 'email' | 'password';
   `,
 })
 export class RegistrarAdulto {
-    private readonly adultos = inject(Adultos);
-    private readonly auth = inject(Auth);
-    private readonly router = inject(Router);
+  private readonly adultos = inject(Adultos);
+  private readonly auth = inject(Auth);
+  private readonly router = inject(Router);
 
-    protected readonly formulario = new FormGroup({
-        first_name: new FormControl('', { nonNullable: true, validators: [Validators.required] }),
-        last_name: new FormControl('', { nonNullable: true, validators: [Validators.required] }),
-        email: new FormControl('', {
-            nonNullable: true,
-            validators: [Validators.required, Validators.minLength(3), Validators.email],
-        }),
-        phone: new FormControl('', { nonNullable: true }),
-        birth_date: new FormControl('', { nonNullable: true }),
-        address: new FormControl('', { nonNullable: true }),
-        password: new FormControl('', {
-            nonNullable: true,
-            validators: [Validators.required, Validators.minLength(6)],
-        }),
+  protected readonly formulario = new FormGroup({
+    first_name: new FormControl('', { nonNullable: true, validators: [Validators.required] }),
+    last_name: new FormControl('', { nonNullable: true, validators: [Validators.required] }),
+    email: new FormControl('', {
+      nonNullable: true,
+      validators: [Validators.required, Validators.minLength(3), Validators.email],
+    }),
+    phone: new FormControl('', { nonNullable: true }),
+    birth_date: new FormControl('', { nonNullable: true }),
+    address: new FormControl('', { nonNullable: true }),
+    password: new FormControl('', {
+      nonNullable: true,
+      validators: [Validators.required, Validators.minLength(6)],
+    }),
+  });
+
+  protected readonly cargando = signal(false);
+  protected readonly mensajeError = signal('');
+
+  protected mostrarError(campo: Campo): boolean {
+    const control = this.formulario.controls[campo];
+    return control.invalid && control.touched;
+  }
+
+  protected guardar(): void {
+    this.formulario.markAllAsTouched();
+    if (this.formulario.invalid || this.cargando()) {
+      return;
+    }
+
+    this.cargando.set(true);
+    this.mensajeError.set('');
+    const valores = this.formulario.getRawValue();
+
+    const datos: NuevoAdulto = {
+      first_name: valores.first_name.trim(),
+      last_name: valores.last_name.trim(),
+      email: valores.email.trim(),
+      password: valores.password,
+    };
+    if (valores.phone.trim()) {
+      datos.phone = valores.phone.trim();
+    }
+    if (valores.birth_date) {
+      datos.birth_date = valores.birth_date;
+    }
+    if (valores.address.trim()) {
+      datos.address = valores.address.trim();
+    }
+
+    this.adultos.crear(datos).subscribe({
+      next: () => {
+        this.cargando.set(false);
+        this.router.navigateByUrl('/familiar');
+      },
+      error: (error: HttpErrorResponse) => {
+        this.cargando.set(false);
+        if (error.status === 401) {
+          this.auth.cerrarSesion();
+          return;
+        }
+        this.mensajeError.set(this.traducirError(error));
+      },
     });
+  }
 
-    protected readonly cargando = signal(false);
-    protected readonly mensajeError = signal('');
-
-    protected mostrarError(campo: Campo): boolean {
-        const control = this.formulario.controls[campo];
-        return control.invalid && control.touched;
+  private traducirError(error: HttpErrorResponse): string {
+    if (correoDuplicado(error)) {
+      return 'Ya existe una cuenta con ese correo.';
     }
-
-    protected guardar(): void {
-        this.formulario.markAllAsTouched();
-        if (this.formulario.invalid || this.cargando()) {
-            return;
-        }
-
-        this.cargando.set(true);
-        this.mensajeError.set('');
-        const valores = this.formulario.getRawValue();
-
-        const datos: NuevoAdulto = {
-            first_name: valores.first_name.trim(),
-            last_name: valores.last_name.trim(),
-            email: valores.email.trim(),
-            password: valores.password,
-        };
-        if (valores.phone.trim()) {
-            datos.phone = valores.phone.trim();
-        }
-        if (valores.birth_date) {
-            datos.birth_date = valores.birth_date;
-        }
-        if (valores.address.trim()) {
-            datos.address = valores.address.trim();
-        }
-
-        this.adultos.crear(datos).subscribe({
-            next: () => {
-                this.cargando.set(false);
-                this.router.navigateByUrl('/familiar');
-            },
-            error: (error: HttpErrorResponse) => {
-                this.cargando.set(false);
-                if (error.status === 401) {
-                    this.auth.cerrarSesion();
-                    return;
-                }
-                this.mensajeError.set(this.traducirError(error.status));
-            },
-        });
+    switch (error.status) {
+      case 403:
+        return 'Solo un familiar puede registrar adultos mayores.';
+      case 422:
+        return 'Revisa los datos: alguno no es válido.';
+      case 503:
+        return 'El servicio no está disponible ahora. Inténtalo más tarde.';
+      default:
+        return 'No pudimos guardar los datos. Revisa tu conexión e inténtalo de nuevo.';
     }
-
-    private traducirError(estado: number): string {
-        switch (estado) {
-            case 403:
-                return 'Solo un familiar puede registrar adultos mayores.';
-            case 409:
-                return 'Ya existe una cuenta con ese correo.';
-            case 422:
-                return 'Revisa los datos: alguno no es válido.';
-            case 503:
-                return 'El servicio no está disponible ahora. Inténtalo más tarde.';
-            default:
-                return 'No pudimos guardar los datos. Revisa tu conexión e inténtalo de nuevo.';
-        }
-    }
+  }
 }

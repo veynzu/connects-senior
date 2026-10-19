@@ -1,7 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
-import { Observable, tap } from 'rxjs';
+import { Observable, finalize, map, shareReplay, tap, throwError } from 'rxjs';
 
 import { API_BASE_URL } from './api-config';
 
@@ -54,6 +54,9 @@ export class Auth {
 
     private readonly sesion = signal<SesionGuardada | null>(this.leerSesion());
 
+    /** Renovación en curso: si varias peticiones fallan a la vez, todas esperan la misma. */
+    private renovacion: Observable<string> | null = null;
+
     readonly usuario = computed(() => this.sesion()?.usuario ?? null);
     readonly token = computed(() => this.sesion()?.idToken ?? null);
 
@@ -75,6 +78,55 @@ export class Auth {
     /** POST /api/auth/password-reset (contrato v1.0, A5): responde 204 exista o no el correo. */
     recuperar(email: string): Observable<void> {
         return this.http.post<void>(`${API_BASE_URL}/api/auth/password-reset`, { email });
+    }
+
+    /**
+     * POST /api/auth/refresh (contrato v1.0, A3): pide un token nuevo con el refresh_token
+     * guardado y devuelve el id_token nuevo. Responde igual que el login (A1).
+     */
+    refrescar(): Observable<string> {
+        const actual = this.sesion();
+        if (!actual) {
+            return throwError(() => new Error('No hay sesión para renovar.'));
+        }
+        if (!this.renovacion) {
+            this.renovacion = this.http
+                .post<LoginResponse>(`${API_BASE_URL}/api/auth/refresh`, {
+                    refresh_token: actual.refreshToken,
+                })
+                .pipe(
+                    tap((respuesta) =>
+                        this.persistirSesion({
+                            idToken: respuesta.id_token,
+                            refreshToken: respuesta.refresh_token || actual.refreshToken,
+                            expiraEn: Date.now() + respuesta.expires_in * 1000,
+                            usuario: { ...actual.usuario, ...respuesta.user },
+                        }),
+                    ),
+                    map((respuesta) => respuesta.id_token),
+                    finalize(() => {
+                        this.renovacion = null;
+                    }),
+                    shareReplay(1),
+                );
+        }
+        return this.renovacion;
+    }
+
+    /**
+     * GET /api/auth/me (contrato v1.0, A2): al recargar la página, recupera el usuario
+     * y su rol desde el token guardado. Si no hay conexión, se conserva el usuario guardado.
+     */
+    recuperarUsuario(): void {
+        if (!this.estaAutenticado()) {
+            return;
+        }
+        this.http.get<UsuarioAutenticado>(`${API_BASE_URL}/api/auth/me`).subscribe({
+            next: (usuario) => this.actualizarUsuario(usuario),
+            error: () => {
+                /* Sin conexión: se mantiene el usuario guardado. Un 401 lo maneja el interceptor. */
+            },
+        });
     }
 
     /** Pantalla a la que va cada rol después de iniciar sesión. */
@@ -146,7 +198,7 @@ export class Auth {
                 return null;
             }
             const sesion = JSON.parse(texto) as SesionGuardada;
-            return Date.now() < sesion.expiraEn ? sesion : null;
+            return sesion;
         } catch {
             return null;
         }
