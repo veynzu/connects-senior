@@ -16,8 +16,8 @@ import {
   horaRelativa,
 } from '../core/notificaciones';
 
-/** Cuántas notificaciones se muestran en el panel. */
-const MAXIMO_VISIBLES = 20;
+/** Cuántas notificaciones del historial se muestran en el panel (las más recientes). */
+const MAXIMO_VISIBLES = 50;
 
 const ICONOS: Record<TipoNotificacion, string> = {
   alerta: '🤝',
@@ -28,6 +28,8 @@ const ICONOS: Record<TipoNotificacion, string> = {
 
 /**
  * Campana de la cabecera superior con el número de notificaciones sin leer.
+ * El panel muestra el historial: las no vistas resaltadas y las vistas con el estilo normal.
+ * Al cerrarlo (o al tocar un elemento) todo lo mostrado queda como visto y sigue en la lista.
  * El panel se ancla al borde inferior del contenedor posicionado más cercano (la cabecera).
  */
 @Component({
@@ -84,7 +86,8 @@ const ICONOS: Record<TipoNotificacion, string> = {
                   type="button"
                   class="elemento"
                   [class.no-leida]="servicio.esNoLeida(n.id)"
-                  [class.urgente]="n.tipo === 'alerta'"
+                  [class.cerrada]="n.estado === 'cerrada'"
+                  [class.urgente]="n.tipo === 'alerta' && n.estado === 'activa'"
                   (click)="abrir(n)"
                 >
                   <span class="icono" aria-hidden="true">{{ icono(n) }}</span>
@@ -245,6 +248,9 @@ const ICONOS: Record<TipoNotificacion, string> = {
     .hora {
       color: #4b5563;
     }
+    .cerrada .hora {
+      color: #5f6673;
+    }
     .punto {
       flex: none;
       width: 0.875rem;
@@ -288,7 +294,7 @@ export class CampanaNotificaciones {
 
   protected alternar(): void {
     if (this.abierto()) {
-      this.abierto.set(false);
+      this.cerrar();
       return;
     }
     this.abierto.set(true);
@@ -297,7 +303,7 @@ export class CampanaNotificaciones {
 
   protected abrir(notificacion: Notificacion): void {
     this.servicio.marcarLeida(notificacion.id);
-    this.abierto.set(false);
+    this.cerrar();
     this.router.navigateByUrl(notificacion.ruta);
   }
 
@@ -308,7 +314,7 @@ export class CampanaNotificaciones {
       destino instanceof Node &&
       !this.elemento.nativeElement.contains(destino)
     ) {
-      this.abierto.set(false);
+      this.cerrar();
     }
   }
 
@@ -316,7 +322,7 @@ export class CampanaNotificaciones {
     if (!this.abierto()) {
       return;
     }
-    this.abierto.set(false);
+    this.cerrar();
     this.boton().nativeElement.focus();
   }
 
@@ -326,5 +332,11 @@ export class CampanaNotificaciones {
 
   protected hora(notificacion: Notificacion): string {
     return horaRelativa(notificacion.fecha);
+  }
+
+  /** Cierra el panel: lo que se mostró ya se vio (queda en la lista sin resaltar). */
+  private cerrar(): void {
+    this.abierto.set(false);
+    this.servicio.marcarTodasLeidas();
   }
 }
