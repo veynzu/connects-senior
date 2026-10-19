@@ -1,0 +1,7 @@
+__pycache__/
+node_modules/
+dist/
+.angular/
+.env
+.env.*
+!.env.example
