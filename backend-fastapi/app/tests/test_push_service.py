@@ -32,16 +32,25 @@ CONTACT_EMAIL = "Hija@Example.com "
 
 
 class FakeSendToTokens:
-    """Sustituto de fcm_client.send_to_tokens: registra cada llamada, sin red."""
+    """Sustituto de fcm_client.send_to_tokens: registra cada llamada, sin red.
+
+    "options" guarda los argumentos con nombre recibidos (click_path, ttl_seconds).
+    """
 
     def __init__(self, result: FcmResult | None = None, error: Exception | None = None):
         self.calls: list[dict] = []
         self.result = result
         self.error = error
 
-    def __call__(self, tokens, title, body, data):
+    def __call__(self, tokens, title, body, data, **options):
         self.calls.append(
-            {"tokens": list(tokens), "title": title, "body": body, "data": data}
+            {
+                "tokens": list(tokens),
+                "title": title,
+                "body": body,
+                "data": data,
+                "options": options,
+            }
         )
         if self.error is not None:
             raise self.error
@@ -371,3 +380,64 @@ def test_reachable_uids_after_token_removed(devices):
     devices.remove_tokens([TOKEN_B1])
 
     assert reachable_uids([UID_A, UID_B], devices) == [UID_A]
+
+
+# --- Web push: click_path y ttl_seconds se pasan a fcm_client (D-LL-3) ---
+
+
+CLICK_PATH = f"/llamadas/entrante/call-1#t={SECRET_VALUE}"
+
+
+def test_notify_users_without_web_options_calls_fcm_as_before(fake_send, devices):
+    notify_users([UID_B], TITLE, BODY, DATA, devices)
+
+    # Sin click_path ni ttl_seconds la llamada a FCM es exactamente la de siempre.
+    assert fake_send.calls[0]["options"] == {}
+
+
+def test_notify_users_passes_click_path_and_ttl_to_fcm(fake_send, devices):
+    sent = notify_users(
+        [UID_B],
+        TITLE,
+        BODY,
+        DATA,
+        devices,
+        click_path=CLICK_PATH,
+        ttl_seconds=120,
+    )
+
+    assert sent == 1
+    call = fake_send.calls[0]
+    assert call["tokens"] == [TOKEN_B1]
+    assert call["data"] == DATA
+    assert call["options"] == {"click_path": CLICK_PATH, "ttl_seconds": 120}
+
+
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [
+        ({"click_path": CLICK_PATH}, {"click_path": CLICK_PATH}),
+        ({"ttl_seconds": 30}, {"ttl_seconds": 30}),
+        ({"click_path": None, "ttl_seconds": None}, {}),
+    ],
+    ids=["click_path_only", "ttl_only", "explicit_none"],
+)
+def test_notify_users_passes_only_given_web_options(
+    fake_send, devices, options, expected
+):
+    notify_users([UID_B], TITLE, BODY, DATA, devices, **options)
+
+    assert fake_send.calls[0]["options"] == expected
+
+
+def test_notify_users_click_path_never_logged_on_failure(fake_send, devices, caplog):
+    caplog.set_level(logging.DEBUG, logger=PUSH_LOGGER)
+    fake_send.error = RuntimeError(f"fallo con {CLICK_PATH}")
+
+    sent = notify_users(
+        [UID_A], TITLE, BODY, DATA, devices, click_path=CLICK_PATH, ttl_seconds=120
+    )
+
+    assert sent == 0
+    assert CLICK_PATH not in caplog.text
+    assert SECRET_VALUE not in caplog.text

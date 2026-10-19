@@ -235,3 +235,147 @@ def test_send_to_tokens_emits_no_deprecation_warning(fake_send):
 def test_fcm_unavailable_error_is_fcm_error():
     assert issubclass(FcmUnavailableError, FcmError)
     assert issubclass(FcmError, Exception)
+
+
+# --- Web push con enlace de clic y TTL (D-LL-2, D-LL-3) ---
+
+
+CLICK_PATH = "/llamadas/entrante/call-1#room=https%3A%2F%2Facme.daily.co%2Fcs&t=" + (
+    SECRET_TOKEN
+)
+
+
+def _wire(message: messaging.MulticastMessage) -> list[dict]:
+    """El JSON que el SDK enviaría a FCM por cada token (sin red).
+
+    Usa la misma expansión y codificación que send_each_for_multicast: detecta un
+    mensaje que el SDK rechazaría al enviarlo (ValueError al codificar).
+    """
+    return [
+        messaging._MessagingService.encode_message(single)
+        for single in messaging._get_messages_from_multicast(message)
+    ]
+
+
+def test_send_to_tokens_without_click_path_has_no_webpush(fake_send):
+    send_to_tokens(["token-a"], TITLE, BODY, DATA)
+
+    message = fake_send.calls[0]["message"]
+    assert message.webpush is None
+    assert message.notification.title == TITLE
+    assert message.notification.body == BODY
+    assert message.data == DATA
+    wire = _wire(message)
+    assert len(wire) == 1
+    assert "webpush" not in wire[0]
+    assert wire[0]["notification"] == {"title": TITLE, "body": BODY}
+    assert wire[0]["data"] == DATA
+
+
+def test_send_to_tokens_with_click_path_adds_webpush_click_action(fake_send):
+    send_to_tokens(
+        ["token-a"], TITLE, BODY, DATA, click_path=CLICK_PATH, ttl_seconds=120
+    )
+
+    message = fake_send.calls[0]["message"]
+    # Lo de siempre sigue igual: notificación multiplataforma y data.
+    assert message.notification.title == TITLE
+    assert message.notification.body == BODY
+    assert message.data == DATA
+    webpush = message.webpush
+    assert isinstance(webpush, messaging.WebpushConfig)
+    assert webpush.headers == {"Urgency": "high", "TTL": "120"}
+    assert isinstance(webpush.notification, messaging.WebpushNotification)
+    assert webpush.notification.title == TITLE
+    assert webpush.notification.body == BODY
+    assert webpush.notification.require_interaction is True
+    assert webpush.notification.data == {
+        "onActionClick": {
+            "default": {"operation": "navigateLastFocusedOrOpen", "url": CLICK_PATH}
+        }
+    }
+
+
+def test_send_to_tokens_click_path_wire_format_for_angular_service_worker(fake_send):
+    send_to_tokens(
+        ["token-a", "token-b"],
+        TITLE,
+        BODY,
+        DATA,
+        click_path=CLICK_PATH,
+        ttl_seconds=120,
+    )
+
+    wire = _wire(fake_send.calls[0]["message"])
+
+    assert len(wire) == 2
+    for encoded in wire:
+        assert encoded["notification"] == {"title": TITLE, "body": BODY}
+        assert encoded["data"] == DATA
+        assert encoded["webpush"]["headers"] == {"Urgency": "high", "TTL": "120"}
+        notification = encoded["webpush"]["notification"]
+        assert notification["title"] == TITLE
+        assert notification["body"] == BODY
+        assert notification["requireInteraction"] is True
+        # ngsw abre la app solo si notification.data.onActionClick.default existe.
+        assert notification["data"]["onActionClick"]["default"] == {
+            "operation": "navigateLastFocusedOrOpen",
+            "url": CLICK_PATH,
+        }
+
+
+def test_send_to_tokens_ttl_without_click_path_only_sets_header(fake_send):
+    send_to_tokens(["token-a"], TITLE, BODY, DATA, ttl_seconds=60)
+
+    message = fake_send.calls[0]["message"]
+    assert message.webpush.headers == {"TTL": "60"}
+    assert message.webpush.notification is None
+    wire = _wire(message)
+    assert wire[0]["webpush"] == {"headers": {"TTL": "60"}}
+
+
+def test_send_to_tokens_click_path_without_ttl_has_no_ttl_header(fake_send):
+    send_to_tokens(["token-a"], TITLE, BODY, DATA, click_path=CLICK_PATH)
+
+    webpush = fake_send.calls[0]["message"].webpush
+    assert webpush.headers == {"Urgency": "high"}
+    assert webpush.notification.data["onActionClick"]["default"]["url"] == CLICK_PATH
+
+
+def test_send_to_tokens_click_path_in_every_batch(fake_send):
+    tokens = [f"token-{index}" for index in range(MAX_TOKENS_PER_MULTICAST + 1)]
+
+    send_to_tokens(tokens, TITLE, BODY, DATA, click_path=CLICK_PATH, ttl_seconds=120)
+
+    assert len(fake_send.calls) == 2
+    for call in fake_send.calls:
+        webpush = call["message"].webpush
+        assert webpush.notification.data["onActionClick"]["default"]["url"] == (
+            CLICK_PATH
+        )
+        assert webpush.headers["TTL"] == "120"
+
+
+def test_send_to_tokens_click_path_never_logged(fake_send, caplog):
+    caplog.set_level(logging.DEBUG, logger=FCM_LOGGER)
+    fake_send.responder = lambda message: [
+        _failed(messaging.QuotaExceededError("cuota agotada"))
+    ]
+
+    result = send_to_tokens(
+        ["token-a"], TITLE, BODY, DATA, click_path=CLICK_PATH, ttl_seconds=120
+    )
+
+    assert result.failure_count == 1
+    assert CLICK_PATH not in caplog.text
+    assert SECRET_TOKEN not in caplog.text
+
+
+def test_send_to_tokens_with_click_path_emits_no_deprecation_warning(fake_send):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        send_to_tokens(
+            ["token-a"], TITLE, BODY, DATA, click_path=CLICK_PATH, ttl_seconds=120
+        )
+
+    assert not [item for item in caught if issubclass(item.category, DeprecationWarning)]
