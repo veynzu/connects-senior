@@ -4,17 +4,21 @@ import { FormControl, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 
 import { Auth } from '../../core/auth';
+import { GrabadorVoz } from './grabador-voz';
 import { Mensaje, Mensajes, horaMensaje } from './mensajes';
 
 type Estado = 'cargando' | 'error' | 'listo';
 
+/** Contrato v1.0 / backend: M1 acepta como máximo 2000 caracteres. */
+const MAXIMO_CARACTERES = 2000;
+
 @Component({
-    selector: 'app-conversacion',
-    imports: [ReactiveFormsModule, RouterLink],
-    changeDetection: ChangeDetectionStrategy.OnPush,
-    styleUrls: ['../../shared/formulario.css'],
-    styles: [
-        `
+  selector: 'app-conversacion',
+  imports: [ReactiveFormsModule, RouterLink, GrabadorVoz],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  styleUrls: ['../../shared/formulario.css'],
+  styles: [
+    `
       .burbujas {
         list-style: none;
         padding: 0;
@@ -61,8 +65,8 @@ type Estado = 'cargando' | 'error' | 'listo';
         border-radius: 0.75rem;
       }
     `,
-    ],
-    template: `
+  ],
+  template: `
     <main class="pagina">
       <h1>Conversación</h1>
 
@@ -97,7 +101,13 @@ type Estado = 'cargando' | 'error' | 'listo';
 
           <form class="escribir" (ngSubmit)="enviar()" novalidate>
             <label for="texto">Escribe tu mensaje</label>
-            <input id="texto" type="text" [formControl]="texto" autocomplete="off" />
+            <input
+              id="texto"
+              type="text"
+              [formControl]="texto"
+              [attr.maxlength]="maximo"
+              autocomplete="off"
+            />
             @if (errorEnvio()) {
               <p class="error-general" role="alert">{{ errorEnvio() }}</p>
             }
@@ -105,6 +115,8 @@ type Estado = 'cargando' | 'error' | 'listo';
               {{ enviando() ? 'Enviando…' : 'Enviar' }}
             </button>
           </form>
+
+          <app-grabador-voz [contactoId]="contactoId" />
         }
       }
 
@@ -113,86 +125,97 @@ type Estado = 'cargando' | 'error' | 'listo';
   `,
 })
 export class Conversacion {
-    private readonly ruta = inject(ActivatedRoute);
-    private readonly servicio = inject(Mensajes);
-    private readonly auth = inject(Auth);
+  private readonly ruta = inject(ActivatedRoute);
+  private readonly servicio = inject(Mensajes);
+  private readonly auth = inject(Auth);
 
-    private readonly contactoId = this.ruta.snapshot.paramMap.get('contactoId') ?? '';
+  protected readonly contactoId = this.ruta.snapshot.paramMap.get('contactoId') ?? '';
+  protected readonly maximo = MAXIMO_CARACTERES;
 
-    protected readonly estado = signal<Estado>('cargando');
-    protected readonly lista = signal<Mensaje[]>([]);
-    protected readonly mensajeError = signal('');
-    protected readonly enviando = signal(false);
-    protected readonly errorEnvio = signal('');
+  protected readonly estado = signal<Estado>('cargando');
+  protected readonly lista = signal<Mensaje[]>([]);
+  protected readonly mensajeError = signal('');
+  protected readonly enviando = signal(false);
+  protected readonly errorEnvio = signal('');
 
-    protected readonly texto = new FormControl('', {
-        nonNullable: true,
-        validators: [Validators.required, Validators.pattern(/\S/)],
-    });
+  protected readonly texto = new FormControl('', {
+    nonNullable: true,
+    validators: [
+      Validators.required,
+      Validators.pattern(/\S/),
+      Validators.maxLength(MAXIMO_CARACTERES),
+    ],
+  });
 
-    constructor() {
-        this.cargar();
-    }
+  constructor() {
+    this.cargar();
+  }
 
-    protected cargar(): void {
-        this.estado.set('cargando');
-        this.servicio.conversacion(this.contactoId).subscribe({
-            next: (mensajes) => {
-                this.lista.set(
-                    [...mensajes].sort(
-                        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
-                    ),
-                );
-                this.estado.set('listo');
-            },
-            error: (error: HttpErrorResponse) => {
-                if (error.status === 401) {
-                    this.auth.cerrarSesion();
-                    return;
-                }
-                this.mensajeError.set(
-                    error.status === 403
-                        ? 'No tienes permiso para ver esta conversación.'
-                        : 'No pudimos cargar los mensajes. Revisa tu conexión e inténtalo de nuevo.',
-                );
-                this.estado.set('error');
-            },
-        });
-    }
-
-    protected hora(m: Mensaje): string {
-        return horaMensaje(m.created_at);
-    }
-
-    protected enviar(): void {
-        if (this.texto.invalid) {
-            this.errorEnvio.set('Escribe un mensaje antes de enviar.');
-            return;
+  protected cargar(): void {
+    this.estado.set('cargando');
+    this.servicio.conversacion(this.contactoId).subscribe({
+      next: (mensajes) => {
+        this.lista.set(
+          [...mensajes].sort(
+            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+          ),
+        );
+        this.estado.set('listo');
+      },
+      error: (error: HttpErrorResponse) => {
+        if (error.status === 401) {
+          this.auth.cerrarSesion();
+          return;
         }
-        const contenido = this.texto.value.trim();
-        this.enviando.set(true);
-        this.errorEnvio.set('');
-        this.servicio.enviar(this.contactoId, contenido).subscribe({
-            next: (enviado) => {
-                this.lista.update((actual) => [
-                    ...actual,
-                    { id: enviado.id, from_me: true, text: contenido, created_at: enviado.created_at },
-                ]);
-                this.texto.reset('');
-                this.enviando.set(false);
-            },
-            error: (error: HttpErrorResponse) => {
-                this.enviando.set(false);
-                if (error.status === 401) {
-                    this.auth.cerrarSesion();
-                    return;
-                }
-                this.errorEnvio.set(
-                    error.status === 403
-                        ? 'No tienes permiso para enviar mensajes a este contacto.'
-                        : 'No pudimos enviar el mensaje. Inténtalo de nuevo.',
-                );
-            },
-        });
+        this.mensajeError.set(
+          error.status === 403
+            ? 'No tienes permiso para ver esta conversación.'
+            : 'No pudimos cargar los mensajes. Revisa tu conexión e inténtalo de nuevo.',
+        );
+        this.estado.set('error');
+      },
+    });
+  }
+
+  protected hora(m: Mensaje): string {
+    return horaMensaje(m.created_at);
+  }
+
+  protected enviar(): void {
+    if (this.texto.invalid) {
+      this.errorEnvio.set(
+        this.texto.hasError('maxlength')
+          ? `El mensaje no puede pasar de ${MAXIMO_CARACTERES} caracteres.`
+          : 'Escribe un mensaje antes de enviar.',
+      );
+      return;
     }
+    const contenido = this.texto.value.trim();
+    this.enviando.set(true);
+    this.errorEnvio.set('');
+    this.servicio.enviar(this.contactoId, contenido).subscribe({
+      next: (enviado) => {
+        this.lista.update((actual) => [
+          ...actual,
+          { id: enviado.id, from_me: true, text: contenido, created_at: enviado.created_at },
+        ]);
+        this.texto.reset('');
+        this.enviando.set(false);
+      },
+      error: (error: HttpErrorResponse) => {
+        this.enviando.set(false);
+        if (error.status === 401) {
+          this.auth.cerrarSesion();
+          return;
+        }
+        this.errorEnvio.set(
+          error.status === 403
+            ? 'No tienes permiso para enviar mensajes a este contacto.'
+            : error.status === 422
+              ? 'El mensaje no es válido: no puede estar vacío ni pasar de 2000 caracteres.'
+              : 'No pudimos enviar el mensaje. Inténtalo de nuevo.',
+        );
+      },
+    });
+  }
 }
