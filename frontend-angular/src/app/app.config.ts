@@ -12,6 +12,7 @@ import { provideServiceWorker } from '@angular/service-worker';
 import { routes } from './app.routes';
 import { Auth } from './core/auth';
 import { authInterceptor } from './core/auth-interceptor';
+import { Notificaciones } from './core/notificaciones';
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -20,6 +21,7 @@ export const appConfig: ApplicationConfig = {
     provideRouter(routes),
     provideAppInitializer(() => {
       inject(Auth).recuperarUsuario();
+      inject(Notificaciones).iniciar();
     }),
     provideServiceWorker('ngsw-worker.js', {
       enabled: !isDevMode(),
