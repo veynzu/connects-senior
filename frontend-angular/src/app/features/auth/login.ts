@@ -1,9 +1,10 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, inject, signal } from '@angular/core';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 
 import { Auth } from '../../core/auth';
+import { detalleError } from '../../core/errores';
 
 type CampoLogin = 'email' | 'password';
 
@@ -19,6 +20,10 @@ type CampoLogin = 'email' | 'password';
     <main class="contenido">
       <h1>Iniciar sesión</h1>
       <p>Escribe tu correo y tu contraseña para entrar.</p>
+
+      @if (aviso()) {
+        <p class="aviso" role="status">{{ aviso() }}</p>
+      }
 
       <form [formGroup]="formulario" (ngSubmit)="entrar()" novalidate>
         <p class="nota"><span class="obligatorio" aria-hidden="true">*</span> Campo obligatorio</p>
@@ -139,6 +144,14 @@ type CampoLogin = 'email' | 'password';
       color: #b3141b;
       font-weight: 700;
     }
+    .aviso {
+      padding: var(--space-2);
+      border: 2px solid var(--color-primary);
+      border-radius: var(--radius);
+      background: var(--color-surface);
+      color: var(--color-heading);
+      font-weight: 700;
+    }
     .error-general {
       padding: var(--space-2);
       border: 2px solid #b3141b;
@@ -191,6 +204,12 @@ export class Login {
   protected readonly cargando = signal(false);
   protected readonly verContrasena = signal(false);
   protected readonly mensajeError = signal('');
+  /** Aviso que dejó otra pantalla: "te enviamos un correo de verificación" o "verifica tu correo". */
+  protected readonly aviso = this.auth.mensajeInicio;
+
+  constructor() {
+    inject(DestroyRef).onDestroy(() => this.auth.limpiarMensajeInicio());
+  }
 
   protected mostrarError(campo: CampoLogin): boolean {
     const control = this.formulario.controls[campo];
@@ -205,6 +224,7 @@ export class Login {
 
     this.cargando.set(true);
     this.mensajeError.set('');
+    this.auth.limpiarMensajeInicio();
     const { email, password } = this.formulario.getRawValue();
 
     this.auth.login(email.trim(), password).subscribe({
@@ -214,17 +234,20 @@ export class Login {
       },
       error: (error: HttpErrorResponse) => {
         this.cargando.set(false);
-        this.mensajeError.set(this.traducirError(error.status));
+        this.mensajeError.set(this.traducirError(error));
       },
     });
   }
 
-  private traducirError(estado: number): string {
-    switch (estado) {
+  private traducirError(error: HttpErrorResponse): string {
+    switch (error.status) {
       case 401:
         return 'El correo o la contraseña no son correctos. Revísalos e inténtalo de nuevo.';
       case 403:
-        return 'Tu cuenta está deshabilitada. Habla con tu familiar responsable.';
+        // El backend explica el motivo: cuenta deshabilitada o correo sin verificar.
+        return (
+          detalleError(error) || 'Tu cuenta está deshabilitada. Habla con tu familiar responsable.'
+        );
       case 429:
         return 'Hiciste muchos intentos. Espera unos minutos e inténtalo otra vez.';
       case 503:

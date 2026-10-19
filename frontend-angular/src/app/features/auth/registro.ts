@@ -152,17 +152,22 @@ export class Registro {
     this.mensajeError.set('');
     const { first_name, last_name, email, password } = this.formulario.getRawValue();
 
+    const correo = email.trim();
     this.auth
-      .registrar({
+      .registrarSinSesion({
         first_name: first_name.trim(),
         last_name: last_name.trim(),
-        email: email.trim(),
+        email: correo,
         password,
       })
       .subscribe({
         next: () => {
+          // No se entra todavía: el backend exige verificar el correo antes de iniciar sesión.
           this.cargando.set(false);
-          this.router.navigateByUrl('/familiar');
+          this.auth.avisarEnInicio(
+            `Te enviamos un correo de verificación a ${correo}. Ábrelo y luego inicia sesión.`,
+          );
+          this.router.navigateByUrl('/login');
         },
         error: (error: HttpErrorResponse) => {
           this.cargando.set(false);
