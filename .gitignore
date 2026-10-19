@@ -36,3 +36,12 @@ coverage/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Herramientas locales de IA (Claude Code): configuracion personal, no se comparte
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+
+# Documentos y notas locales (orden de Andres, 2026-10-18): ningun .md ni la carpeta docs/ se suben
+*.md
+docs/

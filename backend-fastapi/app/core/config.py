@@ -14,6 +14,14 @@ class Settings(BaseSettings):
     firebase_project_id: str = ""
     firebase_credentials_path: str = ""
     firebase_web_api_key: str = ""
+    firebase_use_emulator: bool = False
+    daily_api_key: str = ""
+    daily_domain: str = ""
+    alert_escalation_seconds: int = 120
+    reminder_missed_minutes: int = 15
+    voice_messages_dir: str = ""
+    voice_message_max_bytes: int = 5_242_880
+    voice_message_signing_key: str = ""
 
     model_config = SettingsConfigDict(
         env_file=BACKEND_DIR / ".env",
