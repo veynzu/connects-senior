@@ -19,10 +19,11 @@ type Campo = 'first_name' | 'last_name' | 'email' | 'password' | 'repetir';
       <p>Con esta cuenta podrás registrar y acompañar a tu adulto mayor.</p>
 
       <form [formGroup]="formulario" (ngSubmit)="crear()" novalidate>
+        <p class="nota"><span class="obligatorio" aria-hidden="true">*</span> Campo obligatorio</p>
         <div class="campo">
-          <label for="nombre">Nombre</label>
+          <label for="nombre">Nombre <span class="obligatorio" aria-hidden="true">*</span></label>
           <input
-            id="nombre"
+            id="nombre" aria-required="true"
             type="text"
             formControlName="first_name"
             autocomplete="given-name"
@@ -35,9 +36,9 @@ type Campo = 'first_name' | 'last_name' | 'email' | 'password' | 'repetir';
         </div>
 
         <div class="campo">
-          <label for="apellido">Apellido</label>
+          <label for="apellido">Apellido <span class="obligatorio" aria-hidden="true">*</span></label>
           <input
-            id="apellido"
+            id="apellido" aria-required="true"
             type="text"
             formControlName="last_name"
             autocomplete="family-name"
@@ -50,9 +51,9 @@ type Campo = 'first_name' | 'last_name' | 'email' | 'password' | 'repetir';
         </div>
 
         <div class="campo">
-          <label for="correo">Correo electrónico</label>
+          <label for="correo">Correo electrónico <span class="obligatorio" aria-hidden="true">*</span></label>
           <input
-            id="correo"
+            id="correo" aria-required="true"
             type="email"
             formControlName="email"
             autocomplete="email"
@@ -68,9 +69,9 @@ type Campo = 'first_name' | 'last_name' | 'email' | 'password' | 'repetir';
         </div>
 
         <div class="campo">
-          <label for="clave">Contraseña</label>
+          <label for="clave">Contraseña <span class="obligatorio" aria-hidden="true">*</span></label>
           <input
-            id="clave"
+            id="clave" aria-required="true"
             type="password"
             formControlName="password"
             autocomplete="new-password"
@@ -83,9 +84,9 @@ type Campo = 'first_name' | 'last_name' | 'email' | 'password' | 'repetir';
         </div>
 
         <div class="campo">
-          <label for="repetir">Repite la contraseña</label>
+          <label for="repetir">Repite la contraseña <span class="obligatorio" aria-hidden="true">*</span></label>
           <input
-            id="repetir"
+            id="repetir" aria-required="true"
             type="password"
             formControlName="repetir"
             autocomplete="new-password"

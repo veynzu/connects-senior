@@ -22,10 +22,11 @@ import { Auth } from '../../core/auth';
         <a class="entrar" routerLink="/login">Volver a iniciar sesión</a>
       } @else {
         <form (ngSubmit)="enviar()" novalidate>
+        <p class="nota"><span class="obligatorio" aria-hidden="true">*</span> Campo obligatorio</p>
           <div class="campo">
-            <label for="correo">Correo electrónico</label>
+            <label for="correo">Correo electrónico <span class="obligatorio" aria-hidden="true">*</span></label>
             <input
-              id="correo"
+              id="correo" aria-required="true"
               type="email"
               [formControl]="correo"
               autocomplete="email"

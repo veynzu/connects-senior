@@ -23,10 +23,11 @@ type Campo = 'first_name' | 'last_name' | 'relationship' | 'email';
         <p class="error-general" role="alert">{{ errorCarga() }}</p>
       } @else {
         <form [formGroup]="formulario" (ngSubmit)="guardar()" novalidate>
+        <p class="nota"><span class="obligatorio" aria-hidden="true">*</span> Campo obligatorio</p>
           <div class="campo">
-            <label for="nombre">Nombre</label>
+            <label for="nombre">Nombre <span class="obligatorio" aria-hidden="true">*</span></label>
             <input
-              id="nombre"
+              id="nombre" aria-required="true"
               type="text"
               formControlName="first_name"
               autocomplete="off"
@@ -39,9 +40,9 @@ type Campo = 'first_name' | 'last_name' | 'relationship' | 'email';
           </div>
 
           <div class="campo">
-            <label for="apellido">Apellido</label>
+            <label for="apellido">Apellido <span class="obligatorio" aria-hidden="true">*</span></label>
             <input
-              id="apellido"
+              id="apellido" aria-required="true"
               type="text"
               formControlName="last_name"
               autocomplete="off"
@@ -54,9 +55,9 @@ type Campo = 'first_name' | 'last_name' | 'relationship' | 'email';
           </div>
 
           <div class="campo">
-            <label for="relacion">Relación (por ejemplo: Hija, Hijo, Cuidadora)</label>
+            <label for="relacion">Relación (por ejemplo: Hija, Hijo, Cuidadora) <span class="obligatorio" aria-hidden="true">*</span></label>
             <input
-              id="relacion"
+              id="relacion" aria-required="true"
               type="text"
               formControlName="relationship"
               autocomplete="off"

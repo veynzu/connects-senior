@@ -1,9 +1,10 @@
-import { HttpErrorResponse } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { catchError, forkJoin, of } from 'rxjs';
 
+import { API_BASE_URL } from '../../core/api-config';
 import { Auth } from '../../core/auth';
 import { Contacto, Contactos } from '../contactos/contactos';
 import { LlamadaIniciada, Llamadas } from './llamadas';
@@ -21,6 +22,7 @@ type Estado = 'conectando' | 'activa' | 'error';
       @switch (estado()) {
         @case ('conectando') {
           <p role="status" class="mensaje">Conectando…</p>
+          <button type="button" class="finalizar" (click)="colgar()">Colgar</button>
         }
         @case ('activa') {
           @if (sala(); as url) {
@@ -32,7 +34,7 @@ type Estado = 'conectando' | 'activa' | 'error';
             ></iframe>
           }
           <p role="status" class="mensaje">Comunicación en curso</p>
-          <button type="button" class="finalizar" (click)="finalizar()">Finalizar llamada</button>
+          <button type="button" class="finalizar" (click)="colgar()">Colgar</button>
         }
         @case ('error') {
           <div class="error" role="alert">
@@ -117,6 +119,7 @@ type Estado = 'conectando' | 'activa' | 'error';
 export class Llamada {
   private readonly ruta = inject(ActivatedRoute);
   private readonly router = inject(Router);
+  private readonly http = inject(HttpClient);
   private readonly llamadas = inject(Llamadas);
   private readonly contactos = inject(Contactos);
   private readonly auth = inject(Auth);
@@ -132,6 +135,8 @@ export class Llamada {
   protected readonly servicioNoDisponible = signal(false);
 
   private callId = '';
+  /** Se marca si la persona cuelga mientras la llamada todavía se está creando. */
+  private colgado = false;
 
   constructor() {
     this.iniciar();
@@ -140,12 +145,18 @@ export class Llamada {
   protected iniciar(): void {
     this.estado.set('conectando');
     this.servicioNoDisponible.set(false);
+    this.colgado = false;
 
     forkJoin({
       llamada: this.llamadas.iniciar(this.contactoId, this.soloAudio),
       lista: this.contactos.listar().pipe(catchError(() => of([] as Contacto[]))),
     }).subscribe({
       next: ({ llamada, lista }) => {
+        if (this.colgado) {
+          /* Colgó antes de que la llamada existiera: se cierra apenas se crea. */
+          this.terminar(llamada.call_id, 'cancelada');
+          return;
+        }
         const direccion = this.direccionSegura(llamada);
         if (!direccion) {
           this.fallar(0);
@@ -159,17 +170,33 @@ export class Llamada {
         this.sala.set(this.sanitizer.bypassSecurityTrustResourceUrl(direccion));
         this.estado.set('activa');
       },
-      error: (error: HttpErrorResponse) => this.fallar(error.status),
+      error: (error: HttpErrorResponse) => {
+        if (!this.colgado) {
+          this.fallar(error.status);
+        }
+      },
     });
   }
 
-  protected finalizar(): void {
-    const salir = () => this.router.navigateByUrl('/contactos');
-    if (!this.callId) {
-      salir();
-      return;
+  /**
+   * El botón Colgar está disponible desde que empieza la pantalla (por si la llamada fue un error).
+   * PROPUESTA: antes de que cargue la sala se envía "cancelada"; con la sala abierta, "completada".
+   * El contrato aún no define cómo saber si el contacto llegó a unirse.
+   */
+  protected colgar(): void {
+    const antesDeLaSala = this.estado() === 'conectando';
+    this.colgado = true;
+    if (this.callId) {
+      this.terminar(this.callId, antesDeLaSala ? 'cancelada' : 'completada');
     }
-    this.llamadas.actualizar(this.callId, 'completada').subscribe({ next: salir, error: salir });
+    this.router.navigateByUrl('/contactos');
+  }
+
+  /** L2: PATCH /api/calls/{call_id} con { status }. Si falla, la persona igual sale de la llamada. */
+  private terminar(callId: string, status: 'completada' | 'cancelada'): void {
+    this.http
+      .patch(`${API_BASE_URL}/api/calls/${callId}`, { status })
+      .subscribe({ error: () => undefined });
   }
 
   /** Solo se acepta una sala con https; el token se agrega como parámetro "t". */

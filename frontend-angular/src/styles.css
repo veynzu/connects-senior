@@ -91,3 +91,7 @@ h1 {
     transition: none !important;
   }
 }
+.obligatorio {
+  color: var(--color-danger);
+  font-weight: 700;
+}

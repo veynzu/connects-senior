@@ -80,10 +80,11 @@ export class Cuidadores {
         <a class="entrar" routerLink="/familiar">Volver al inicio</a>
       } @else {
         <form [formGroup]="formulario" (ngSubmit)="enviar()" novalidate>
+        <p class="nota"><span class="obligatorio" aria-hidden="true">*</span> Campo obligatorio</p>
           <div class="campo">
-            <label for="nombre">Nombre</label>
+            <label for="nombre">Nombre <span class="obligatorio" aria-hidden="true">*</span></label>
             <input
-              id="nombre"
+              id="nombre" aria-required="true"
               type="text"
               formControlName="first_name"
               autocomplete="off"
@@ -95,9 +96,9 @@ export class Cuidadores {
           </div>
 
           <div class="campo">
-            <label for="apellido">Apellido</label>
+            <label for="apellido">Apellido <span class="obligatorio" aria-hidden="true">*</span></label>
             <input
-              id="apellido"
+              id="apellido" aria-required="true"
               type="text"
               formControlName="last_name"
               autocomplete="off"
@@ -109,9 +110,9 @@ export class Cuidadores {
           </div>
 
           <div class="campo">
-            <label for="correo">Correo electrónico</label>
+            <label for="correo">Correo electrónico <span class="obligatorio" aria-hidden="true">*</span></label>
             <input
-              id="correo"
+              id="correo" aria-required="true"
               type="email"
               formControlName="email"
               autocomplete="off"

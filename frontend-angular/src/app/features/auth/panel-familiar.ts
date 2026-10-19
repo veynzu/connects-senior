@@ -15,7 +15,7 @@ type Estado = 'cargando' | 'error' | 'listo';
   template: `
     <main class="pagina">
       <h1>Hola, {{ nombre() }}</h1>
-      <p>Tus adultos mayores</p>
+      <p>{{ esFamiliar() ? 'Tus adultos mayores' : 'Adultos mayores a tu cargo' }}</p>
 
       @switch (estado()) {
         @case ('cargando') {
@@ -29,7 +29,13 @@ type Estado = 'cargando' | 'error' | 'listo';
         }
         @case ('listo') {
           @if (lista().length === 0) {
-            <p>Todavía no has registrado a ningún adulto mayor.</p>
+            <p>
+              {{
+                esFamiliar()
+                  ? 'Todavía no has registrado a ningún adulto mayor.'
+                  : 'Todavía no tienes adultos mayores a tu cargo.'
+              }}
+            </p>
           } @else {
             <ul class="lista">
               @for (a of lista(); track a.id) {
@@ -50,9 +56,11 @@ type Estado = 'cargando' | 'error' | 'listo';
                   <a class="enlace" [routerLink]="['/adultos', a.id, 'historial']">
                     Historial de llamadas
                   </a>
-                  <a class="enlace" [routerLink]="['/adultos', a.id, 'cuidadores', 'nuevo']">
-                    Invitar cuidador
-                  </a>
+                  @if (esFamiliar()) {
+                    <a class="enlace" [routerLink]="['/adultos', a.id, 'cuidadores', 'nuevo']">
+                      Invitar cuidador
+                    </a>
+                  }
                 </li>
               }
             </ul>
@@ -60,7 +68,9 @@ type Estado = 'cargando' | 'error' | 'listo';
         }
       }
 
-      <a class="entrar" routerLink="/adultos/nuevo">Registrar adulto mayor</a>
+      @if (esFamiliar()) {
+        <a class="entrar" routerLink="/adultos/nuevo">Registrar adulto mayor</a>
+      }
       <a class="entrar secundario" routerLink="/perfil">Mi perfil</a>
       <button type="button" class="entrar secundario" (click)="salir()">Cerrar sesión</button>
     </main>
@@ -73,6 +83,9 @@ export class PanelFamiliar {
   protected readonly estado = signal<Estado>('cargando');
   protected readonly lista = signal<Adulto[]>([]);
   protected readonly mensajeError = signal('');
+
+  /** Contrato A9: invitar cuidadores es solo del familiar responsable; el cuidador no ve ese botón. */
+  protected readonly esFamiliar = computed(() => this.auth.usuario()?.role !== 'cuidador');
 
   protected readonly nombre = computed(() => {
     const usuario = this.auth.usuario();
@@ -99,7 +112,7 @@ export class PanelFamiliar {
         this.mensajeError.set(
           error.status === 403
             ? 'No tienes permiso para ver esta información.'
-            : 'No pudimos cargar tus adultos mayores. Revisa tu conexión e inténtalo de nuevo.',
+            : 'No pudimos cargar los adultos mayores. Revisa tu conexión e inténtalo de nuevo.',
         );
         this.estado.set('error');
       },

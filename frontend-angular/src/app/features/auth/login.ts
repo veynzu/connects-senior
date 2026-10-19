@@ -21,10 +21,11 @@ type CampoLogin = 'email' | 'password';
       <p>Escribe tu correo y tu contraseña para entrar.</p>
 
       <form [formGroup]="formulario" (ngSubmit)="entrar()" novalidate>
+        <p class="nota"><span class="obligatorio" aria-hidden="true">*</span> Campo obligatorio</p>
         <div class="campo">
-          <label for="correo">Correo electrónico</label>
+          <label for="correo">Correo electrónico <span class="obligatorio" aria-hidden="true">*</span></label>
           <input
-            id="correo"
+            id="correo" aria-required="true"
             type="email"
             formControlName="email"
             autocomplete="email"
@@ -40,10 +41,10 @@ type CampoLogin = 'email' | 'password';
         </div>
 
         <div class="campo">
-          <label for="clave">Contraseña</label>
+          <label for="clave">Contraseña <span class="obligatorio" aria-hidden="true">*</span></label>
           <div class="con-boton">
             <input
-              id="clave"
+              id="clave" aria-required="true"
               [type]="verContrasena() ? 'text' : 'password'"
               formControlName="password"
               autocomplete="current-password"

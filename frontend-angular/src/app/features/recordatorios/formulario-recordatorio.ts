@@ -65,9 +65,10 @@ function aFechaLocal(iso: string): string {
         }
         @case ('listo') {
           <form [formGroup]="formulario" (ngSubmit)="enviar()" novalidate>
+        <p class="nota"><span class="obligatorio" aria-hidden="true">*</span> Campo obligatorio</p>
             <div class="campo">
-              <label for="tipo">Tipo</label>
-              <select id="tipo" formControlName="kind">
+              <label for="tipo">Tipo <span class="obligatorio" aria-hidden="true">*</span></label>
+              <select id="tipo" aria-required="true" formControlName="kind">
                 @for (t of tipos; track t.valor) {
                   <option [value]="t.valor">{{ t.texto }}</option>
                 }
@@ -75,9 +76,9 @@ function aFechaLocal(iso: string): string {
             </div>
 
             <div class="campo">
-              <label for="descripcion">Descripción</label>
+              <label for="descripcion">Descripción <span class="obligatorio" aria-hidden="true">*</span></label>
               <input
-                id="descripcion"
+                id="descripcion" aria-required="true"
                 type="text"
                 formControlName="description"
                 [attr.aria-invalid]="invalido('description')"
@@ -91,9 +92,9 @@ function aFechaLocal(iso: string): string {
             </div>
 
             <div class="campo">
-              <label for="fecha">Fecha y hora</label>
+              <label for="fecha">Fecha y hora <span class="obligatorio" aria-hidden="true">*</span></label>
               <input
-                id="fecha"
+                id="fecha" aria-required="true"
                 type="datetime-local"
                 formControlName="fecha"
                 [attr.aria-invalid]="invalido('fecha')"

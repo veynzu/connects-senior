@@ -19,10 +19,11 @@ type Campo = 'first_name' | 'last_name' | 'email' | 'password';
       <h1>Registrar adulto mayor</h1>
 
       <form [formGroup]="formulario" (ngSubmit)="guardar()" novalidate>
+        <p class="nota"><span class="obligatorio" aria-hidden="true">*</span> Campo obligatorio</p>
         <div class="campo">
-          <label for="nombre">Nombre</label>
+          <label for="nombre">Nombre <span class="obligatorio" aria-hidden="true">*</span></label>
           <input
-            id="nombre"
+            id="nombre" aria-required="true"
             type="text"
             formControlName="first_name"
             [attr.aria-invalid]="mostrarError('first_name') ? 'true' : null"
@@ -34,9 +35,9 @@ type Campo = 'first_name' | 'last_name' | 'email' | 'password';
         </div>
 
         <div class="campo">
-          <label for="apellido">Apellido</label>
+          <label for="apellido">Apellido <span class="obligatorio" aria-hidden="true">*</span></label>
           <input
-            id="apellido"
+            id="apellido" aria-required="true"
             type="text"
             formControlName="last_name"
             [attr.aria-invalid]="mostrarError('last_name') ? 'true' : null"
@@ -48,9 +49,9 @@ type Campo = 'first_name' | 'last_name' | 'email' | 'password';
         </div>
 
         <div class="campo">
-          <label for="correo">Correo electrónico</label>
+          <label for="correo">Correo electrónico <span class="obligatorio" aria-hidden="true">*</span></label>
           <input
-            id="correo"
+            id="correo" aria-required="true"
             type="email"
             formControlName="email"
             inputmode="email"
@@ -81,9 +82,9 @@ type Campo = 'first_name' | 'last_name' | 'email' | 'password';
         </div>
 
         <div class="campo">
-          <label for="clave">Contraseña para que entre a su cuenta</label>
+          <label for="clave">Contraseña para que entre a su cuenta <span class="obligatorio" aria-hidden="true">*</span></label>
           <input
-            id="clave"
+            id="clave" aria-required="true"
             type="password"
             formControlName="password"
             autocomplete="new-password"
