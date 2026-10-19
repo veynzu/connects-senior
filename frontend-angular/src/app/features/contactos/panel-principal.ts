@@ -42,6 +42,11 @@ import { NavegacionInferior } from '../../shared/navegacion-inferior';
         </a>
       </div>
 
+      <nav class="extras" aria-label="Más opciones">
+        <a class="extra" routerLink="/mensajes-voz">Mensajes de voz</a>
+        <a class="extra" routerLink="/historial">Historial de llamadas</a>
+      </nav>
+
       <button type="button" class="salir" (click)="salir()">Cerrar sesión</button>
     </main>
 
@@ -100,6 +105,20 @@ import { NavegacionInferior } from '../../shared/navegacion-inferior';
       grid-column: 1 / -1;
       background: var(--color-warning);
       color: #1f2937;
+    }
+    .extras {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+      margin-top: var(--space-2);
+    }
+    .extra {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: var(--touch-target);
+      color: var(--color-primary);
+      font-weight: 700;
     }
     .salir {
       width: 100%;

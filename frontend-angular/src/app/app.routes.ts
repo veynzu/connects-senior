@@ -12,6 +12,7 @@ import { Login } from './features/auth/login';
 import { Recuperar } from './features/auth/recuperar';
 import { RegistrarAdulto } from './features/auth/registrar-adulto';
 import { Registro } from './features/auth/registro';
+import { Historial } from './features/comunicacion/historial';
 import { Llamada } from './features/comunicacion/llamada';
 import { AgregarContacto } from './features/contactos/agregar-contacto';
 import { ContactosAdulto } from './features/contactos/contactos-adulto';
@@ -21,6 +22,7 @@ import { MisContactos } from './features/contactos/mis-contactos';
 import { PanelPrincipal } from './features/contactos/panel-principal';
 import { Conversacion } from './features/mensajes/conversacion';
 import { ListaMensajes } from './features/mensajes/lista-mensajes';
+import { BuzonVoz } from './features/mensajes/mensajes-voz';
 import { FormularioRecordatorio } from './features/recordatorios/formulario-recordatorio';
 import { MisRecordatorios } from './features/recordatorios/mis-recordatorios';
 import { RecordatoriosAdulto } from './features/recordatorios/recordatorios-adulto';
@@ -78,9 +80,12 @@ export const routes: Routes = [
     component: InvitarCuidador,
     canActivate: [authGuard],
   },
+  { path: 'adultos/:adultoId/historial', component: Historial, canActivate: [authGuard] },
+  { path: 'historial', component: Historial, canActivate: [authGuard] },
   { path: 'recordatorios', component: MisRecordatorios, canActivate: [authGuard] },
   { path: 'mensajes', component: ListaMensajes, canActivate: [authGuard] },
   { path: 'mensajes/:contactoId', component: Conversacion, canActivate: [authGuard] },
+  { path: 'mensajes-voz', component: BuzonVoz, canActivate: [authGuard] },
   { path: 'contactos', component: MisContactos, canActivate: [authGuard] },
   { path: 'ayuda', component: SolicitarAyuda, canActivate: [authGuard] },
   { path: 'llamada/:id', component: Llamada, canActivate: [authGuard] },
