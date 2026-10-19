@@ -8,6 +8,11 @@ verificada con dispositivo registrado, L1 crea un segundo meeting token para esa
 persona y se lo envía por push. Ese paso nunca hace fallar L1, y el token del
 contacto no se guarda ni se registra en el log.
 
+La push lleva además un enlace de clic (D-LL-2): al tocar la notificación la app
+se abre en /llamadas/entrante/{call_id}#room=...&t=...&audio=...&from=... (el
+fragmento nunca viaja al servidor de Hosting) y FCM la descarta si no se entrega en
+INCOMING_CALL_PUSH_TTL_SECONDS.
+
 start_call es async: los repositorios (síncronos y, con SQL, con red) se llaman solo
 desde funciones síncronas internas ejecutadas con run_in_threadpool (D-R3-15). La
 resolución del destinatario y la push van después de guardar y dentro de
@@ -15,6 +20,7 @@ try/except: un fallo ahí nunca convierte en error una llamada ya guardada (D-R3
 """
 import logging
 from datetime import datetime, timezone
+from urllib.parse import quote, urlencode
 from uuid import uuid4
 
 from starlette.concurrency import run_in_threadpool
@@ -38,6 +44,10 @@ from app.services import push_service
 
 AUDIO_CALL_PUSH_TITLE = "Llamada entrante"
 VIDEO_CALL_PUSH_TITLE = "Videollamada entrante"
+# Ruta del front que muestra la llamada entrante (acoplamiento documentado, AV-11).
+INCOMING_CALL_PATH = "/llamadas/entrante/"
+# Una llamada de hace más de 2 minutos ya no se entrega (cabecera TTL de web push).
+INCOMING_CALL_PUSH_TTL_SECONDS = 120
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +202,8 @@ async def _notify_callee(
         "audio_only": "true" if record.audio_only else "false",
         "from_name": from_name,
     }
+    # También lleva el token: nunca se registra.
+    click_path = _incoming_call_click_path(record, callee_token, from_name)
     try:
         await run_in_threadpool(
             push_service.notify_users,
@@ -200,12 +212,33 @@ async def _notify_callee(
             f"{from_name} te está llamando",
             data,
             devices,
+            click_path=click_path,
+            ttl_seconds=INCOMING_CALL_PUSH_TTL_SECONDS,
         )
     except Exception as error:
         # notify_users no lanza; esto es defensa en profundidad.
         logger.error(
             "No se pudo enviar la push de llamada entrante (%s)", type(error).__name__
         )
+
+
+def _incoming_call_click_path(
+    record: CallRecord, callee_token: str, from_name: str
+) -> str:
+    """Ruta relativa que abre la notificación (D-LL-2).
+
+    /llamadas/entrante/{call_id}#room=<room_url>&t=<token>&audio=1|0&from=<nombre>,
+    con el fragmento codificado como formulario (URLSearchParams lo lee tal cual).
+    """
+    fragment = urlencode(
+        {
+            "room": record.room_url,
+            "t": callee_token,
+            "audio": "1" if record.audio_only else "0",
+            "from": from_name,
+        }
+    )
+    return f"{INCOMING_CALL_PATH}{quote(record.id, safe='')}#{fragment}"
 
 
 def update_call_status(

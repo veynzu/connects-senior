@@ -32,6 +32,7 @@ from app.services.auth_service import (
     AuthMethodDisabledError,
     AuthProviderUnavailableError,
     EmailAlreadyExistsError,
+    EmailNotVerifiedError,
     InvalidCredentialsError,
     InvalidProfileDataError,
     InvalidTokenError,
@@ -91,15 +92,28 @@ def _adult_not_found() -> HTTPException:
     )
 
 
+def _email_not_verified(error: EmailNotVerifiedError) -> HTTPException:
+    """403 con el texto fijo del servicio (D-LL-4)."""
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=str(error),
+    )
+
+
 @router.post("/login", response_model=LoginResponse)
-async def login(payload: LoginRequest) -> LoginResponse:
+async def login(
+    payload: LoginRequest,
+    users: UserRepository = Depends(get_user_repository),
+) -> LoginResponse:
     try:
-        return await sign_in_with_email_password(payload)
+        return await sign_in_with_email_password(payload, users=users)
     except InvalidCredentialsError as error:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(error),
         ) from error
+    except EmailNotVerifiedError as error:
+        raise _email_not_verified(error) from error
     except UserDisabledError as error:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -119,14 +133,19 @@ async def login(payload: LoginRequest) -> LoginResponse:
 
 
 @router.post("/refresh", response_model=LoginResponse)
-async def refresh(payload: RefreshRequest) -> LoginResponse:
+async def refresh(
+    payload: RefreshRequest,
+    users: UserRepository = Depends(get_user_repository),
+) -> LoginResponse:
     try:
-        return await refresh_session(payload)
+        return await refresh_session(payload, users=users)
     except InvalidTokenError as error:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(error),
         ) from error
+    except EmailNotVerifiedError as error:
+        raise _email_not_verified(error) from error
     except UserDisabledError as error:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

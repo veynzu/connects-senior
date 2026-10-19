@@ -47,6 +47,17 @@ _FIREBASE_CODE_PATTERN = re.compile(r"[A-Z0-9_]{1,100}")
 _PROFILE_NAME_FIELDS = ("first_name", "last_name")
 _PROFILE_REPOSITORY_FIELDS = ("first_name", "last_name", "phone", "photo_url")
 
+# Correo verificado obligatorio (D-LL-4): A1 pide el correo de verificación y A3 y
+# toda ruta con Bearer (core.security.get_current_user) responden 403.
+EMAIL_NOT_VERIFIED_LOGIN_DETAIL = (
+    "Debes verificar tu correo electrónico. Te enviamos un enlace a tu correo: "
+    "ábrelo y después inicia sesión de nuevo."
+)
+EMAIL_NOT_VERIFIED_DETAIL = (
+    "Debes verificar tu correo electrónico antes de continuar. "
+    "Inicia sesión de nuevo para recibir el enlace."
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -102,10 +113,30 @@ class AccountPermissionDeniedError(AuthServiceError):
     """El rol del usuario no permite la operación de cuentas (defensa en profundidad)."""
 
 
+class EmailNotVerifiedError(AuthServiceError):
+    """La cuenta no tiene el correo verificado (D-LL-4); el router responde 403."""
+
+
 async def sign_in_with_email_password(
     login: LoginRequest,
     client: httpx.AsyncClient | None = None,
+    *,
+    users: UserRepository | None = None,
+    require_verified_email: bool = True,
 ) -> LoginResponse:
+    """A1: inicia sesión con correo y contraseña y arma el user con accounts:lookup.
+
+    Correo verificado obligatorio (D-LL-4): si Firebase dice que el correo no está
+    verificado, se pide el correo de verificación (sin garantía: un fallo de red o
+    de configuración solo se registra) y se lanza EmailNotVerifiedError. Con el
+    correo verificado y un repositorio, se marca en la base para que exista el
+    vínculo contacto -> usuario desde el primer inicio de sesión (D-LL-5); ese paso
+    nunca hace fallar el inicio de sesión. users=None no marca nada.
+
+    register_family (A4) pasa require_verified_email=False: la cuenta recién creada
+    aún no está verificada, el contrato exige que A4 devuelva los tokens y A4 ya
+    pide su propio correo de verificación.
+    """
     web_api_key = _get_web_api_key()
 
     request_client = client if client is not None else httpx.AsyncClient(timeout=10.0)
@@ -142,15 +173,19 @@ async def sign_in_with_email_password(
             ) from error
 
         user = await _lookup_user(id_token, request_client)
+        if user.uid != local_id:
+            raise AuthProviderUnavailableError(
+                "Firebase devolvió una respuesta de usuario inválida."
+            )
+
+        if require_verified_email and user.email_verified is not True:
+            await _request_verification_email(id_token, request_client)
+            raise EmailNotVerifiedError(EMAIL_NOT_VERIFIED_LOGIN_DETAIL)
     finally:
         if should_close_client:
             await request_client.aclose()
 
-    if user.uid != local_id:
-        raise AuthProviderUnavailableError(
-            "Firebase devolvió una respuesta de usuario inválida."
-        )
-
+    await _mark_verified_email(user, users)
     return LoginResponse(
         id_token=id_token,
         refresh_token=refresh_token,
@@ -162,7 +197,15 @@ async def sign_in_with_email_password(
 async def refresh_session(
     payload: RefreshRequest,
     client: httpx.AsyncClient | None = None,
+    *,
+    users: UserRepository | None = None,
 ) -> LoginResponse:
+    """A3: renueva la sesión con el refresh_token y arma el user como A1.
+
+    Correo no verificado: EmailNotVerifiedError sin enviar correo (D-LL-4). Correo
+    verificado y repositorio: se marca en la base sin poder hacer fallar la
+    renovación (D-LL-5). users=None no marca nada.
+    """
     web_api_key = _get_web_api_key()
 
     request_client = client if client is not None else httpx.AsyncClient(timeout=10.0)
@@ -205,7 +248,10 @@ async def refresh_session(
         raise AuthProviderUnavailableError(
             "Firebase devolvió una respuesta de usuario inválida."
         )
+    if user.email_verified is not True:
+        raise EmailNotVerifiedError(EMAIL_NOT_VERIFIED_DETAIL)
 
+    await _mark_verified_email(user, users)
     return LoginResponse(
         id_token=id_token,
         refresh_token=refresh_token,
@@ -246,6 +292,39 @@ def verify_firebase_id_token(id_token: str) -> AuthenticatedUser:
         photo_url=_optional_string(decoded_token, "picture"),
         role=_parse_role(decoded_token.get("role"), uid),
     )
+
+
+async def _request_verification_email(id_token: str, client: httpx.AsyncClient) -> None:
+    """A1 con correo sin verificar: pide el correo VERIFY_EMAIL sin garantía (D-LL-4).
+
+    Cualquier respuesta de Firebase termina sin excepción (send_oob_code); sin red o
+    sin clave web solo se registra el tipo del error, nunca el token.
+    """
+    try:
+        await send_oob_code("VERIFY_EMAIL", id_token=id_token, client=client)
+    except (AuthProviderUnavailableError, FirebaseConfigurationError) as error:
+        logger.warning(
+            "No se pudo pedir el correo de verificación (%s)",
+            type(error).__name__,
+        )
+
+
+async def _mark_verified_email(
+    user: AuthenticatedUser, users: UserRepository | None
+) -> None:
+    """Marca en la base el correo verificado del usuario (D-LL-5); nunca lanza.
+
+    El repositorio puede hacer red (SQL): va por run_in_threadpool (D-R3-15) y un
+    fallo solo registra el tipo del error (D-R3-23), nunca el correo.
+    """
+    if users is None or user.email_verified is not True or not user.email:
+        return
+    try:
+        await run_in_threadpool(users.mark_email_verified, user.uid, user.email)
+    except Exception as error:
+        logger.error(
+            "No se pudo marcar el correo verificado (%s)", type(error).__name__
+        )
 
 
 async def _lookup_user(id_token: str, client: httpx.AsyncClient) -> AuthenticatedUser:
@@ -535,9 +614,12 @@ async def register_family(
     request_client = client if client is not None else httpx.AsyncClient(timeout=10.0)
     should_close_client = client is None
     try:
+        # La cuenta recién creada aún no está verificada y A4 debe devolver los
+        # tokens (contrato): aquí no se exige el correo verificado (D-LL-4).
         login = await sign_in_with_email_password(
             LoginRequest(email=payload.email, password=payload.password),
             request_client,
+            require_verified_email=False,
         )
         # Intento sin garantía (D-R2-3, P9): sin correo verificado no hay vínculo
         # contacto -> usuario, pero el registro no falla por eso.

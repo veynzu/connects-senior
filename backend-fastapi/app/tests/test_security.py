@@ -1,5 +1,6 @@
 import pytest
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 
 from app.api import auth_router
@@ -247,3 +248,90 @@ def test_can_access_adult_rejects_admin_and_missing_role(role):
         is False
     )
     assert security.can_access_adult(_user(ADULT_UID, role), ADULT_UID, users) is False
+
+
+# --- get_current_user: correo verificado obligatorio (D-LL-4) ---
+
+
+def _bearer(token: str = "valid-token") -> HTTPAuthorizationCredentials:
+    return HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+
+
+def _verified_user(email_verified: bool | None) -> AuthenticatedUser:
+    return AuthenticatedUser(
+        uid="firebase-uid",
+        email="user@example.com",
+        email_verified=email_verified,
+        role=Role.FAMILIAR,
+    )
+
+
+def test_email_not_verified_detail_is_fixed_text():
+    assert security.EMAIL_NOT_VERIFIED_DETAIL == (
+        "Debes verificar tu correo electrónico antes de continuar. "
+        "Inicia sesión de nuevo para recibir el enlace."
+    )
+
+
+@pytest.mark.parametrize("email_verified", [False, None], ids=["false", "absent"])
+def test_get_current_user_rejects_unverified_email(monkeypatch, email_verified):
+    monkeypatch.setattr(
+        security,
+        "verify_firebase_id_token",
+        lambda token: _verified_user(email_verified),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        security.get_current_user(_bearer())
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == security.EMAIL_NOT_VERIFIED_DETAIL
+
+
+def test_get_current_user_accepts_verified_email(monkeypatch):
+    received: list[str] = []
+
+    def fake_verify(token: str) -> AuthenticatedUser:
+        received.append(token)
+        return _verified_user(True)
+
+    monkeypatch.setattr(security, "verify_firebase_id_token", fake_verify)
+
+    user = security.get_current_user(_bearer("token-ok"))
+
+    assert user == _verified_user(True)
+    assert received == ["token-ok"]
+
+
+@pytest.mark.parametrize("email_verified", [False, None], ids=["false", "absent"])
+def test_require_roles_route_unverified_email_403_before_role_check(
+    security_app, monkeypatch, email_verified
+):
+    monkeypatch.setattr(
+        security,
+        "verify_firebase_id_token",
+        lambda token: _verified_user(email_verified),
+    )
+
+    response = TestClient(security_app).get(
+        "/familiar", headers={"Authorization": "Bearer valid-token"}
+    )
+
+    # El rol es correcto, pero sin correo verificado no se entra (no es el 403 de rol).
+    assert response.status_code == 403
+    assert response.json() == {"detail": security.EMAIL_NOT_VERIFIED_DETAIL}
+
+
+def test_require_roles_route_verified_email_200(security_app, monkeypatch):
+    monkeypatch.setattr(
+        security,
+        "verify_firebase_id_token",
+        lambda token: _verified_user(True),
+    )
+
+    response = TestClient(security_app).get(
+        "/familiar", headers={"Authorization": "Bearer valid-token"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["email_verified"] is True

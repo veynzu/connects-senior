@@ -9,6 +9,7 @@ from app.models.auth import AuthenticatedUser
 from app.models.enums import Role
 from app.repositories.user_repository import UserRepository
 from app.services.auth_service import (
+    EMAIL_NOT_VERIFIED_DETAIL,
     AuthProviderUnavailableError,
     InvalidTokenError,
     UserDisabledError,
@@ -29,6 +30,12 @@ logger = logging.getLogger(__name__)
 def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> AuthenticatedUser:
+    """Usuario del id_token de Firebase verificado.
+
+    401 sin Bearer o con un token inválido, 403 con la cuenta deshabilitada o con el
+    correo sin verificar (D-LL-4: email_verified distinto de true), 503 si Firebase
+    no está disponible.
+    """
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -37,7 +44,7 @@ def get_current_user(
         )
 
     try:
-        return verify_firebase_id_token(credentials.credentials)
+        user = verify_firebase_id_token(credentials.credentials)
     except InvalidTokenError as error:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -59,6 +66,13 @@ def get_current_user(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=AUTH_UNAVAILABLE_DETAIL,
         ) from error
+
+    if user.email_verified is not True:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=EMAIL_NOT_VERIFIED_DETAIL,
+        )
+    return user
 
 
 def require_roles(*roles: Role) -> Callable[..., AuthenticatedUser]:

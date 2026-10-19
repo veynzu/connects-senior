@@ -1,0 +1,41 @@
+# Lo que NO sale del equipo hacia Cloud Build ni entra en la imagen del backend.
+# .dockerignore y .gcloudignore tienen el mismo contenido: ningún secreto (.env,
+# JSON de credenciales), base local, volcado SQL, test ni script de despliegue.
+.git
+.venv
+venv
+env
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+.env
+.env.*
+*.json
+*.db
+*.sqlite
+*.sqlite3
+*.log
+*.sql
+media
+app/tests
+deploy
+*.md
+.vscode
+.idea
+# Las mismas reglas en cualquier subcarpeta (en .dockerignore un patrón sin **/ solo
+# se aplica en la raíz de backend-fastapi/).
+**/.env
+**/.env.*
+**/*.json
+**/__pycache__
+**/*.py[cod]
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+**/*.log
+**/*.sql
+**/*.md

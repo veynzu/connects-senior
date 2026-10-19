@@ -80,15 +80,19 @@ def _sign_in_response(request: httpx.Request) -> httpx.Response:
 def _lookup_handler(
     custom_attributes: str | None = None,
     local_id: str = "firebase-uid",
+    email_verified: bool | None = True,
 ) -> Handler:
+    """accounts:lookup simulado; email_verified=None omite emailVerified."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         user = {
             "localId": local_id,
             "email": "user@example.com",
-            "emailVerified": True,
             "displayName": "Test User",
             "photoUrl": "https://example.com/avatar.png",
         }
+        if email_verified is not None:
+            user["emailVerified"] = email_verified
         if custom_attributes is not None:
             user["customAttributes"] = custom_attributes
         return httpx.Response(200, json={"users": [user]})
@@ -261,7 +265,7 @@ def test_verify_firebase_id_token_maps_user_claims(monkeypatch):
 
 
 def test_login_route_returns_tokens(monkeypatch):
-    async def fake_sign_in(payload: LoginRequest) -> LoginResponse:
+    async def fake_sign_in(payload: LoginRequest, **kwargs) -> LoginResponse:
         return LoginResponse(
             id_token="id-token",
             refresh_token="refresh-token",
@@ -288,10 +292,13 @@ def test_me_route_requires_bearer_token():
 
 
 def test_me_route_returns_authenticated_user(monkeypatch):
+    # Correo verificado: sin él get_current_user responde 403 (D-LL-4).
     monkeypatch.setattr(
         security,
         "verify_firebase_id_token",
-        lambda token: AuthenticatedUser(uid="firebase-uid", email="user@example.com"),
+        lambda token: AuthenticatedUser(
+            uid="firebase-uid", email="user@example.com", email_verified=True
+        ),
     )
 
     response = TestClient(app).get(
@@ -569,7 +576,7 @@ def test_verify_firebase_id_token_reads_role_claim(monkeypatch, claim, expected_
 
 
 def test_login_route_includes_role_in_user(monkeypatch):
-    async def fake_sign_in(payload: LoginRequest) -> LoginResponse:
+    async def fake_sign_in(payload: LoginRequest, **kwargs) -> LoginResponse:
         return _login_response(Role.FAMILIAR)
 
     monkeypatch.setattr(auth_router, "sign_in_with_email_password", fake_sign_in)
@@ -585,10 +592,15 @@ def test_login_route_includes_role_in_user(monkeypatch):
 
 def test_me_route_returns_role_from_token(monkeypatch):
     monkeypatch.setattr(auth_service, "get_firebase_app", lambda: object())
+    # Correo verificado: sin él get_current_user responde 403 (D-LL-4).
     monkeypatch.setattr(
         auth_service.firebase_auth,
         "verify_id_token",
-        lambda token, app, check_revoked: {"uid": "firebase-uid", "role": "cuidador"},
+        lambda token, app, check_revoked: {
+            "uid": "firebase-uid",
+            "role": "cuidador",
+            "email_verified": True,
+        },
     )
 
     response = TestClient(app).get(
@@ -604,7 +616,7 @@ def test_me_route_returns_role_from_token(monkeypatch):
 def test_refresh_route_returns_tokens(monkeypatch):
     received: list[RefreshRequest] = []
 
-    async def fake(payload):
+    async def fake(payload, **kwargs):
         received.append(payload)
         return _login_response(Role.FAMILIAR)
 
@@ -633,7 +645,7 @@ def test_refresh_route_returns_tokens(monkeypatch):
 
 
 def test_refresh_route_ignores_bearer_header(monkeypatch):
-    async def fake(payload):
+    async def fake(payload, **kwargs):
         return _login_response(Role.FAMILIAR)
 
     monkeypatch.setattr(auth_router, "refresh_session", fake)
@@ -649,7 +661,7 @@ def test_refresh_route_ignores_bearer_header(monkeypatch):
 
 
 def test_refresh_route_maps_invalid_token_to_401(monkeypatch):
-    async def fake(payload):
+    async def fake(payload, **kwargs):
         raise auth_service.InvalidTokenError("La sesión expiró. Inicia sesión de nuevo.")
 
     monkeypatch.setattr(auth_router, "refresh_session", fake)
@@ -665,7 +677,7 @@ def test_refresh_route_maps_invalid_token_to_401(monkeypatch):
 
 
 def test_refresh_route_maps_user_disabled_to_403(monkeypatch):
-    async def fake(payload):
+    async def fake(payload, **kwargs):
         raise auth_service.UserDisabledError("La cuenta está deshabilitada.")
 
     monkeypatch.setattr(auth_router, "refresh_session", fake)
@@ -682,7 +694,7 @@ def test_refresh_route_maps_user_disabled_to_403(monkeypatch):
 def test_refresh_route_requires_refresh_token(monkeypatch):
     received: list[RefreshRequest] = []
 
-    async def fake(payload):
+    async def fake(payload, **kwargs):
         received.append(payload)
         return _login_response()
 
@@ -708,7 +720,7 @@ def test_refresh_route_requires_refresh_token(monkeypatch):
 def test_login_route_hides_internal_error_on_503(monkeypatch, caplog, error_class):
     caplog.set_level(logging.ERROR, logger="app.api.auth_router")
 
-    async def fake_sign_in(payload: LoginRequest) -> LoginResponse:
+    async def fake_sign_in(payload: LoginRequest, **kwargs) -> LoginResponse:
         raise error_class("mensaje-interno")
 
     monkeypatch.setattr(auth_router, "sign_in_with_email_password", fake_sign_in)
@@ -737,7 +749,7 @@ def test_refresh_route_hides_internal_error_on_503(monkeypatch, caplog):
     ):
         caplog.clear()
 
-        async def fake(payload, error_class=error_class):
+        async def fake(payload, error_class=error_class, **kwargs):
             raise error_class("mensaje-interno")
 
         monkeypatch.setattr(auth_router, "refresh_session", fake)
@@ -2672,3 +2684,529 @@ def test_create_caregiver_existing_database_error_503_never_deletes_account(
     assert "delete_user" not in firebase.events
     assert firebase.created == []
     assert rest.seen == []
+
+
+# =====================================================================================
+# Correo verificado obligatorio (D-LL-4) y marca en la base al iniciar sesión (D-LL-5).
+# =====================================================================================
+
+
+LOGIN_PATH = "/api/auth/login"
+REFRESH_PATH = "/api/auth/refresh"
+LOGIN_BODY = {"email": "user@example.com", "password": "secret123"}
+LOOKUP_EMAIL = "user@example.com"
+LOOKUP_UID = "firebase-uid"
+
+
+def _refresh_ok(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id_token": "id-token",
+            "refresh_token": "new-refresh-token",
+            "expires_in": "3600",
+            "user_id": LOOKUP_UID,
+        },
+    )
+
+
+def _failing_mark(uid, email):
+    raise OperationalError("x", {}, Exception("x"))
+
+
+async def _sign_in_service(
+    routes: dict[tuple[str, str], Handler],
+    seen: list[httpx.Request],
+    users: InMemoryUserRepository | None = None,
+) -> LoginResponse:
+    async with httpx.AsyncClient(transport=_firebase_transport(routes, seen)) as client:
+        return await auth_service.sign_in_with_email_password(
+            LoginRequest(email=LOOKUP_EMAIL, password="secret123"),
+            client=client,
+            users=users,
+        )
+
+
+async def _refresh_service(
+    routes: dict[tuple[str, str], Handler],
+    seen: list[httpx.Request],
+    users: InMemoryUserRepository | None = None,
+) -> LoginResponse:
+    async with httpx.AsyncClient(transport=_firebase_transport(routes, seen)) as client:
+        return await auth_service.refresh_session(
+            RefreshRequest(refresh_token="old-refresh-token"),
+            client=client,
+            users=users,
+        )
+
+
+def _routes_of(seen: list[httpx.Request]) -> list[tuple[str, str]]:
+    return [(request.url.host, request.url.path) for request in seen]
+
+
+def test_email_not_verified_details_are_fixed_texts():
+    assert auth_service.EMAIL_NOT_VERIFIED_LOGIN_DETAIL == (
+        "Debes verificar tu correo electrónico. Te enviamos un enlace a tu correo: "
+        "ábrelo y después inicia sesión de nuevo."
+    )
+    assert auth_service.EMAIL_NOT_VERIFIED_DETAIL == (
+        "Debes verificar tu correo electrónico antes de continuar. "
+        "Inicia sesión de nuevo para recibir el enlace."
+    )
+    # core.security usa la misma constante (auth_service no importa core.security).
+    assert security.EMAIL_NOT_VERIFIED_DETAIL is auth_service.EMAIL_NOT_VERIFIED_DETAIL
+    assert issubclass(auth_service.EmailNotVerifiedError, Exception)
+
+
+# --- A1 (servicio) ---
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("email_verified", [False, None], ids=["false", "absent"])
+async def test_sign_in_unverified_email_requests_verify_email_and_raises(
+    web_api_key, email_verified, caplog
+):
+    caplog.set_level(logging.DEBUG, logger="app.services.auth_service")
+    seen: list[httpx.Request] = []
+    users = InMemoryUserRepository()
+    routes = {
+        SIGN_IN_ROUTE: _sign_in_response,
+        LOOKUP_ROUTE: _lookup_handler(email_verified=email_verified),
+        OOB_ROUTE: _oob_ok,
+    }
+
+    with pytest.raises(auth_service.EmailNotVerifiedError) as error_info:
+        await _sign_in_service(routes, seen, users)
+
+    assert str(error_info.value) == auth_service.EMAIL_NOT_VERIFIED_LOGIN_DETAIL
+    assert _routes_of(seen) == [SIGN_IN_ROUTE, LOOKUP_ROUTE, OOB_ROUTE]
+    oob_request = seen[2]
+    assert oob_request.url.params["key"] == "test-api-key"
+    assert json.loads(oob_request.content) == {
+        "requestType": "VERIFY_EMAIL",
+        "idToken": "id-token",
+    }
+    # Sin correo verificado no hay marca en la base.
+    assert users.find_uid_by_verified_email(LOOKUP_EMAIL) is None
+    assert "id-token" not in caplog.text
+    assert LOOKUP_EMAIL not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("oob_handler", "logged_error"),
+    [
+        (_oob_network_error, "AuthProviderUnavailableError"),
+        (_firebase_error("TOO_MANY_ATTEMPTS_TRY_LATER"), None),
+    ],
+    ids=["network_error", "firebase_error"],
+)
+async def test_sign_in_unverified_email_still_403_when_verify_email_fails(
+    web_api_key, caplog, oob_handler, logged_error
+):
+    caplog.set_level(logging.DEBUG, logger="app.services.auth_service")
+    seen: list[httpx.Request] = []
+    routes = {
+        SIGN_IN_ROUTE: _sign_in_response,
+        LOOKUP_ROUTE: _lookup_handler(email_verified=False),
+        OOB_ROUTE: oob_handler,
+    }
+
+    with pytest.raises(auth_service.EmailNotVerifiedError) as error_info:
+        await _sign_in_service(routes, seen)
+
+    assert str(error_info.value) == auth_service.EMAIL_NOT_VERIFIED_LOGIN_DETAIL
+    if logged_error is not None:
+        assert any(
+            record.levelno == logging.WARNING and logged_error in record.getMessage()
+            for record in caplog.records
+        )
+    assert "id-token" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_sign_in_unverified_email_closes_own_client(web_api_key, monkeypatch):
+    real_async_client = httpx.AsyncClient
+    created: list[httpx.AsyncClient] = []
+    seen: list[httpx.Request] = []
+    routes = {
+        SIGN_IN_ROUTE: _sign_in_response,
+        LOOKUP_ROUTE: _lookup_handler(email_verified=False),
+        OOB_ROUTE: _oob_ok,
+    }
+
+    def factory(**kwargs) -> httpx.AsyncClient:
+        client = real_async_client(transport=_firebase_transport(routes, seen), **kwargs)
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(auth_service.httpx, "AsyncClient", factory)
+
+    with pytest.raises(auth_service.EmailNotVerifiedError):
+        await auth_service.sign_in_with_email_password(
+            LoginRequest(email=LOOKUP_EMAIL, password="secret123")
+        )
+
+    # El correo de verificación sale por el mismo cliente, que se cierra al final.
+    assert _routes_of(seen) == [SIGN_IN_ROUTE, LOOKUP_ROUTE, OOB_ROUTE]
+    assert len(created) == 1
+    assert created[0].is_closed is True
+
+
+@pytest.mark.asyncio
+async def test_sign_in_verified_email_marks_repository(web_api_key):
+    seen: list[httpx.Request] = []
+    users = InMemoryUserRepository()
+    routes = {
+        SIGN_IN_ROUTE: _sign_in_response,
+        LOOKUP_ROUTE: _lookup_handler('{"role": "familiar"}'),
+    }
+
+    response = await _sign_in_service(routes, seen, users)
+
+    assert response.id_token == "id-token"
+    assert response.user.email_verified is True
+    # Sin correo de verificación y con la marca hecha (D-LL-5): el contacto con este
+    # correo queda vinculado a la cuenta desde el primer inicio de sesión.
+    assert _routes_of(seen) == [SIGN_IN_ROUTE, LOOKUP_ROUTE]
+    assert users.find_uid_by_verified_email(LOOKUP_EMAIL) == LOOKUP_UID
+
+
+@pytest.mark.asyncio
+async def test_sign_in_verified_email_mark_failure_still_returns_tokens(
+    web_api_key, caplog
+):
+    caplog.set_level(logging.DEBUG, logger="app.services.auth_service")
+    users = InMemoryUserRepository()
+    users.mark_email_verified = _failing_mark
+    routes = {
+        SIGN_IN_ROUTE: _sign_in_response,
+        LOOKUP_ROUTE: _lookup_handler('{"role": "familiar"}'),
+    }
+
+    response = await _sign_in_service(routes, [], users)
+
+    assert response.id_token == "id-token"
+    assert response.user.uid == LOOKUP_UID
+    assert any(
+        record.levelno == logging.ERROR and "OperationalError" in record.getMessage()
+        for record in caplog.records
+    )
+    assert LOOKUP_EMAIL not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_sign_in_verified_email_without_repository_still_returns_tokens(
+    web_api_key,
+):
+    response = await _sign_in_service(
+        {SIGN_IN_ROUTE: _sign_in_response, LOOKUP_ROUTE: _lookup_handler()}, []
+    )
+
+    assert response.user.email_verified is True
+    assert response.id_token == "id-token"
+
+
+# --- A3 (servicio) ---
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("email_verified", [False, None], ids=["false", "absent"])
+async def test_refresh_session_unverified_email_raises_without_sending_email(
+    web_api_key, email_verified
+):
+    seen: list[httpx.Request] = []
+    users = InMemoryUserRepository()
+    # Sin ruta sendOobCode: cualquier petición a ella haría fallar el transporte.
+    routes = {
+        REFRESH_ROUTE: _refresh_ok,
+        LOOKUP_ROUTE: _lookup_handler(email_verified=email_verified),
+    }
+
+    with pytest.raises(auth_service.EmailNotVerifiedError) as error_info:
+        await _refresh_service(routes, seen, users)
+
+    assert str(error_info.value) == auth_service.EMAIL_NOT_VERIFIED_DETAIL
+    assert _routes_of(seen) == [REFRESH_ROUTE, LOOKUP_ROUTE]
+    assert users.find_uid_by_verified_email(LOOKUP_EMAIL) is None
+
+
+@pytest.mark.asyncio
+async def test_refresh_session_verified_email_marks_repository(web_api_key):
+    users = InMemoryUserRepository()
+    routes = {
+        REFRESH_ROUTE: _refresh_ok,
+        LOOKUP_ROUTE: _lookup_handler('{"role": "cuidador"}'),
+    }
+
+    response = await _refresh_service(routes, [], users)
+
+    assert response.refresh_token == "new-refresh-token"
+    assert users.find_uid_by_verified_email(LOOKUP_EMAIL) == LOOKUP_UID
+
+
+@pytest.mark.asyncio
+async def test_refresh_session_mark_failure_still_returns_tokens(web_api_key, caplog):
+    caplog.set_level(logging.DEBUG, logger="app.services.auth_service")
+    users = InMemoryUserRepository()
+    users.mark_email_verified = _failing_mark
+    routes = {
+        REFRESH_ROUTE: _refresh_ok,
+        LOOKUP_ROUTE: _lookup_handler('{"role": "cuidador"}'),
+    }
+
+    response = await _refresh_service(routes, [], users)
+
+    assert response.id_token == "id-token"
+    assert "OperationalError" in caplog.text
+    assert LOOKUP_EMAIL not in caplog.text
+
+
+# --- A1 y A3 (rutas) ---
+
+
+def test_login_route_unverified_email_403_and_requests_verify_email(
+    web_api_key, rest, account_state
+):
+    rest.routes.update(
+        {
+            SIGN_IN_ROUTE: _sign_in_response,
+            LOOKUP_ROUTE: _lookup_handler(email_verified=False),
+            OOB_ROUTE: _oob_ok,
+        }
+    )
+
+    response = TestClient(app).post(LOGIN_PATH, json=LOGIN_BODY)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": auth_service.EMAIL_NOT_VERIFIED_LOGIN_DETAIL}
+    assert "id-token" not in response.text
+    oob_requests = _requests_to(rest, OOB_ROUTE)
+    assert len(oob_requests) == 1
+    assert json.loads(oob_requests[0].content) == {
+        "requestType": "VERIFY_EMAIL",
+        "idToken": "id-token",
+    }
+    assert account_state.users.find_uid_by_verified_email(LOOKUP_EMAIL) is None
+    assert all(client.is_closed for client in rest.clients)
+
+
+def test_login_route_verified_email_200_and_marks_repository(
+    web_api_key, rest, account_state
+):
+    rest.routes.update(
+        {
+            SIGN_IN_ROUTE: _sign_in_response,
+            LOOKUP_ROUTE: _lookup_handler('{"role": "familiar"}'),
+        }
+    )
+
+    response = TestClient(app).post(LOGIN_PATH, json=LOGIN_BODY)
+
+    assert response.status_code == 200
+    assert response.json()["user"]["email_verified"] is True
+    assert response.json()["user"]["role"] == "familiar"
+    assert _requests_to(rest, OOB_ROUTE) == []
+    assert account_state.users.find_uid_by_verified_email(LOOKUP_EMAIL) == LOOKUP_UID
+
+
+def test_login_route_mark_failure_still_200(
+    web_api_key, rest, account_state, monkeypatch
+):
+    rest.routes.update(
+        {
+            SIGN_IN_ROUTE: _sign_in_response,
+            LOOKUP_ROUTE: _lookup_handler('{"role": "familiar"}'),
+        }
+    )
+    monkeypatch.setattr(account_state.users, "mark_email_verified", _failing_mark)
+
+    response = TestClient(app).post(LOGIN_PATH, json=LOGIN_BODY)
+
+    assert response.status_code == 200
+    assert response.json()["id_token"] == "id-token"
+
+
+def test_login_route_passes_user_repository(account_state, monkeypatch):
+    received: list[dict] = []
+
+    async def fake_sign_in(payload: LoginRequest, **kwargs) -> LoginResponse:
+        received.append(kwargs)
+        return _login_response(Role.FAMILIAR)
+
+    monkeypatch.setattr(auth_router, "sign_in_with_email_password", fake_sign_in)
+
+    response = TestClient(app).post(LOGIN_PATH, json=LOGIN_BODY)
+
+    assert response.status_code == 200
+    assert len(received) == 1
+    assert received[0]["users"] is account_state.users
+
+
+def test_login_route_maps_email_not_verified_to_403(monkeypatch):
+    async def fake_sign_in(payload: LoginRequest, **kwargs) -> LoginResponse:
+        raise auth_service.EmailNotVerifiedError(
+            auth_service.EMAIL_NOT_VERIFIED_LOGIN_DETAIL
+        )
+
+    monkeypatch.setattr(auth_router, "sign_in_with_email_password", fake_sign_in)
+
+    response = TestClient(app).post(LOGIN_PATH, json=LOGIN_BODY)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": auth_service.EMAIL_NOT_VERIFIED_LOGIN_DETAIL}
+
+
+def test_refresh_route_unverified_email_403_without_sending_email(
+    web_api_key, rest, account_state
+):
+    rest.routes.update(
+        {
+            REFRESH_ROUTE: _refresh_ok,
+            LOOKUP_ROUTE: _lookup_handler(email_verified=False),
+        }
+    )
+
+    response = TestClient(app).post(
+        REFRESH_PATH, json={"refresh_token": "old-refresh-token"}
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": auth_service.EMAIL_NOT_VERIFIED_DETAIL}
+    assert "id-token" not in response.text
+    assert _requests_to(rest, OOB_ROUTE) == []
+    assert account_state.users.find_uid_by_verified_email(LOOKUP_EMAIL) is None
+
+
+def test_refresh_route_verified_email_200_and_marks_repository(
+    web_api_key, rest, account_state
+):
+    rest.routes.update(
+        {
+            REFRESH_ROUTE: _refresh_ok,
+            LOOKUP_ROUTE: _lookup_handler('{"role": "cuidador"}'),
+        }
+    )
+
+    response = TestClient(app).post(
+        REFRESH_PATH, json={"refresh_token": "old-refresh-token"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["user"]["role"] == "cuidador"
+    assert account_state.users.find_uid_by_verified_email(LOOKUP_EMAIL) == LOOKUP_UID
+
+
+def test_refresh_route_passes_user_repository(account_state, monkeypatch):
+    received: list[dict] = []
+
+    async def fake(payload, **kwargs):
+        received.append(kwargs)
+        return _login_response(Role.FAMILIAR)
+
+    monkeypatch.setattr(auth_router, "refresh_session", fake)
+
+    response = TestClient(app).post(
+        REFRESH_PATH, json={"refresh_token": "refresh-token"}
+    )
+
+    assert response.status_code == 200
+    assert received[0]["users"] is account_state.users
+
+
+def test_refresh_route_maps_email_not_verified_to_403(monkeypatch):
+    async def fake(payload, **kwargs):
+        raise auth_service.EmailNotVerifiedError(auth_service.EMAIL_NOT_VERIFIED_DETAIL)
+
+    monkeypatch.setattr(auth_router, "refresh_session", fake)
+
+    response = TestClient(app).post(
+        REFRESH_PATH, json={"refresh_token": "refresh-token"}
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": auth_service.EMAIL_NOT_VERIFIED_DETAIL}
+
+
+# --- A4 no cambia: la cuenta nueva sin verificar recibe sus tokens ---
+
+
+@pytest.mark.parametrize("email_verified", [False, None], ids=["false", "absent"])
+def test_register_unverified_new_account_still_200_and_one_verify_email(
+    web_api_key, firebase, rest, account_state, email_verified
+):
+    rest.routes.update(_register_routes())
+    rest.routes[LOOKUP_ROUTE] = _lookup_handler(
+        '{"role": "familiar"}', email_verified=email_verified
+    )
+
+    response = TestClient(app).post(REGISTER_PATH, json=REGISTER_BODY)
+
+    assert response.status_code == 200
+    assert response.json()["id_token"] == "id-token"
+    assert response.json()["user"]["email_verified"] is email_verified
+    assert response.json()["user"]["role"] == "familiar"
+    # Un solo correo de verificación: el de A4, no el de A1.
+    oob_requests = _requests_to(rest, OOB_ROUTE)
+    assert len(oob_requests) == 1
+    assert json.loads(oob_requests[0].content) == {
+        "requestType": "VERIFY_EMAIL",
+        "idToken": "id-token",
+    }
+    assert firebase.events == [
+        "create_user",
+        "set_custom_user_claims",
+        SIGN_IN_ROUTE[1],
+        LOOKUP_ROUTE[1],
+        OOB_ROUTE[1],
+    ]
+    assert account_state.users.find_uid_by_verified_email("ana@example.com") is None
+    assert account_state.users.find_uid_by_verified_email(LOOKUP_EMAIL) is None
+
+
+# --- A2 y rutas con Bearer: get_current_user exige el correo verificado ---
+
+
+@pytest.mark.parametrize("email_verified", [False, None], ids=["false", "absent"])
+def test_me_route_unverified_email_403(monkeypatch, email_verified):
+    claims = {"uid": "firebase-uid", "role": "familiar", "email": LOOKUP_EMAIL}
+    if email_verified is not None:
+        claims["email_verified"] = email_verified
+    monkeypatch.setattr(auth_service, "get_firebase_app", lambda: object())
+    monkeypatch.setattr(
+        auth_service.firebase_auth,
+        "verify_id_token",
+        lambda token, app, check_revoked: claims,
+    )
+
+    response = TestClient(app).get(
+        ME_PATH, headers={"Authorization": "Bearer valid-token"}
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": auth_service.EMAIL_NOT_VERIFIED_DETAIL}
+
+
+def test_register_device_unverified_email_403_and_no_token_saved(
+    monkeypatch, account_state
+):
+    monkeypatch.setattr(
+        security,
+        "verify_firebase_id_token",
+        lambda token: AuthenticatedUser(
+            uid=FAMILY_UID,
+            email=LOOKUP_EMAIL,
+            email_verified=False,
+            role=Role.FAMILIAR,
+        ),
+    )
+
+    response = TestClient(app).post(
+        DEVICES_PATH,
+        json={"fcm_token": "fcm-token"},
+        headers={"Authorization": "Bearer valid-token"},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": auth_service.EMAIL_NOT_VERIFIED_DETAIL}
+    assert account_state.devices.has_device(FAMILY_UID) is False

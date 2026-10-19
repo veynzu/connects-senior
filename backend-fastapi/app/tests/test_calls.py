@@ -3,6 +3,7 @@ import logging
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlencode, urlsplit
 from uuid import UUID
 
 import httpx
@@ -43,6 +44,7 @@ from app.repositories.user_repository import (
 )
 from app.services import push_service
 from app.services.call_service import (
+    INCOMING_CALL_PUSH_TTL_SECONDS,
     CallNotFoundError,
     CallPermissionDeniedError,
     ContactNotFoundError,
@@ -123,15 +125,25 @@ class FakeDailyClient:
 
 
 class FakeSendToTokens:
-    """Sustituto de fcm_client.send_to_tokens: registra cada envío, sin red."""
+    """Sustituto de fcm_client.send_to_tokens: registra cada envío, sin red.
+
+    Registra también click_path y ttl_seconds (web push de la llamada, D-LL-3).
+    """
 
     def __init__(self) -> None:
         self.calls: list[dict] = []
         self.error: Exception | None = None
 
-    def __call__(self, tokens, title, body, data):
+    def __call__(self, tokens, title, body, data, *, click_path=None, ttl_seconds=None):
         self.calls.append(
-            {"tokens": list(tokens), "title": title, "body": body, "data": dict(data)}
+            {
+                "tokens": list(tokens),
+                "title": title,
+                "body": body,
+                "data": dict(data),
+                "click_path": click_path,
+                "ttl_seconds": ttl_seconds,
+            }
         )
         if self.error is not None:
             raise self.error
@@ -838,6 +850,14 @@ def test_l1_pushes_callee_token_when_contact_linked_with_device(
             "expires_at": state.daily.expires_at,
         },
     ]
+    expected_fragment = urlencode(
+        {
+            "room": ROOM_URL,
+            "t": f"token-{CONTACT_UID}",
+            "audio": "1" if audio_only else "0",
+            "from": ADULT_NAME,
+        }
+    )
     assert state.push.calls == [
         {
             "tokens": [CONTACT_FCM_TOKEN],
@@ -851,11 +871,70 @@ def test_l1_pushes_callee_token_when_contact_linked_with_device(
                 "audio_only": audio_only_text,
                 "from_name": ADULT_NAME,
             },
+            "click_path": f"/llamadas/entrante/{body['call_id']}#{expected_fragment}",
+            "ttl_seconds": 120,
         }
     ]
     assert all(
         isinstance(value, str) for value in state.push.calls[0]["data"].values()
     )
+
+
+@pytest.mark.parametrize(("audio_only", "audio_flag"), [(False, "0"), (True, "1")])
+def test_l1_push_click_path_opens_incoming_call_screen(
+    state, client, audio_only, audio_flag
+):
+    _as_user(Role.ADULTO_MAYOR)
+    state.contacts.add(ADULT_UID, _contact(email=CONTACT_EMAIL))
+    _link_contact_account(state)
+
+    response = client.post(
+        CALLS_PATH, json={"contact_id": CONTACT_ID, "audio_only": audio_only}
+    )
+
+    assert response.status_code == 200
+    call_id = response.json()["call_id"]
+    push = state.push.calls[0]
+    click_path = push["click_path"]
+    # Ruta relativa de la pantalla de llamada entrante con los datos en el fragmento
+    # (D-LL-2): el fragmento nunca viaja al servidor de Hosting.
+    assert click_path.startswith(f"/llamadas/entrante/{call_id}#")
+    parts = urlsplit(click_path)
+    assert parts.scheme == ""
+    assert parts.netloc == ""
+    assert parts.path == f"/llamadas/entrante/{call_id}"
+    assert parts.query == ""
+    assert parse_qs(parts.fragment, strict_parsing=True) == {
+        "room": [ROOM_URL],
+        "t": [f"token-{CONTACT_UID}"],
+        "audio": [audio_flag],
+        "from": [ADULT_NAME],
+    }
+    assert push["ttl_seconds"] == INCOMING_CALL_PUSH_TTL_SECONDS == 120
+
+
+@pytest.mark.asyncio
+async def test_start_call_push_click_path_encodes_from_name_with_symbols(state):
+    state.contacts.add(ADULT_UID, _contact(email=CONTACT_EMAIL))
+    _link_contact_account(state)
+    tricky_name = "Rosa & José #1 = 100%"
+
+    result = await start_call(
+        _user(Role.ADULTO_MAYOR, display_name=tricky_name),
+        CallCreateRequest(contact_id=CONTACT_ID),
+        state.contacts,
+        state.calls,
+        state.daily,
+        state.users,
+        state.devices,
+    )
+
+    click_path = state.push.calls[0]["click_path"]
+    path, fragment = click_path.split("#", 1)
+    assert path == f"/llamadas/entrante/{result.call_id}"
+    # Un nombre con &, # o = no rompe el fragmento: cada valor vuelve intacto.
+    assert parse_qs(fragment, strict_parsing=True)["from"] == [tricky_name]
+    assert parse_qs(fragment, strict_parsing=True)["t"] == [f"token-{CONTACT_UID}"]
 
 
 @pytest.mark.asyncio
@@ -878,6 +957,7 @@ async def test_start_call_push_from_name_falls_back_to_uid(state):
     assert push["body"] == f"{ADULT_UID} te está llamando"
     assert push["data"]["from_name"] == ADULT_UID
     assert push["data"]["call_id"] == result.call_id
+    assert parse_qs(push["click_path"].split("#", 1)[1])["from"] == [ADULT_UID]
 
 
 @pytest.mark.parametrize(
@@ -997,6 +1077,9 @@ def test_callee_token_not_stored_nor_logged(state, client, caplog, push_fails):
     assert callee_token not in {str(value) for value in asdict(record).values()}
     assert callee_token not in caplog.text
     assert CONTACT_FCM_TOKEN not in caplog.text
+    # El enlace de clic también lleva el token y tampoco se registra (D-LL-2).
+    assert callee_token in state.push.calls[0]["click_path"]
+    assert state.push.calls[0]["click_path"] not in caplog.text
 
 
 # --- Ronda 3 (D-R3-15, D-R3-23): la resolución del destinatario no tumba L1 ---
