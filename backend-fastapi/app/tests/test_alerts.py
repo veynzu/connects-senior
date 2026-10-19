@@ -1,4 +1,5 @@
 import inspect
+import logging
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -6,6 +7,7 @@ from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
 from app.api import alerts_router
 from app.core.config import get_settings
@@ -1302,3 +1304,86 @@ def test_routes_require_bearer_401(state, client, method, template, payload, wit
     assert response.json() == {"detail": BEARER_DETAIL}
     assert response.headers["www-authenticate"] == "Bearer"
     assert state.alerts.get(created.id).status == AlertStatus.PENDIENTE
+
+
+# --- D-R3-23: un fallo al resolver destinatarios después de guardar no se propaga ---
+
+
+class _FailingUserRepository:
+    """UserRepository envuelto: los métodos indicados fallan como si la base no respondiera."""
+
+    def __init__(self, inner: InMemoryUserRepository, *failing: str) -> None:
+        self._inner = inner
+        self._failing = set(failing)
+        self.failed_calls: list[str] = []
+
+    def __getattr__(self, name: str):
+        attribute = getattr(self._inner, name)
+        if name not in self._failing:
+            return attribute
+
+        def fail(*args, **kwargs):
+            self.failed_calls.append(name)
+            raise OperationalError("x", {}, Exception("x"))
+
+        return fail
+
+
+def test_create_alert_recipient_lookup_failure_still_200_and_alert_saved(
+    state, client, caplog
+):
+    _link_caregiver(state)
+    _link_family(state)
+    state.contacts.add(ADULT_UID, _contact(email="nadie@example.com"))
+    failing = _FailingUserRepository(state.users, "caregivers_of")
+    state.users = failing
+    _as_user(Role.ADULTO_MAYOR)
+
+    with caplog.at_level(logging.ERROR, logger="app.services.alert_service"):
+        response = client.post(ALERTS_PATH, json={"category": "problema"})
+
+    # Sin la protección, el OperationalError llegaría al handler global como 503.
+    assert response.status_code == 200
+    body = response.json()
+    assert body["has_trusted_contacts"] is True
+    record = state.alerts.get(body["id"])
+    assert record is not None
+    assert record.status == AlertStatus.PENDIENTE
+    assert record.category == AlertCategory.PROBLEMA
+    assert failing.failed_calls == ["caregivers_of"]
+    # Sin destinatarios resueltos, se avisa al familiar responsable.
+    assert state.push.tokens == [[TOKEN_FAMILY]]
+    assert "OperationalError" in caplog.text
+    assert "[SQL" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("failing_method", "expected_tokens"),
+    [
+        pytest.param("responsible_family_of", [TOKEN_CAREGIVER], id="familiar"),
+        pytest.param("caregivers_of", [TOKEN_FAMILY], id="destinatarios"),
+    ],
+)
+def test_escalation_recipient_lookup_failure_still_counts_round(
+    state, caplog, failing_method, expected_tokens
+):
+    _link_family(state)
+    _link_caregiver(state)
+    created = _create(state, now=T0)
+    pushes_before = len(state.push.calls)
+    failing = _FailingUserRepository(state.users, failing_method)
+    state.users = failing
+    resent_at = T0 + timedelta(seconds=ESCALATION_SECONDS)
+
+    with caplog.at_level(logging.ERROR, logger="app.services.alert_service"):
+        assert _escalate(state, resent_at) == 1
+
+    record = state.alerts.get(created.id)
+    assert record.notification_round == 1
+    assert record.last_notified_at == resent_at
+    assert record.status == AlertStatus.PENDIENTE
+    assert failing.failed_calls == [failing_method]
+    # La push sale igualmente a la parte que sí se pudo resolver.
+    assert state.push.tokens[pushes_before:] == [expected_tokens]
+    assert "OperationalError" in caplog.text
+    assert "[SQL" not in caplog.text

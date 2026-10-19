@@ -8,6 +8,8 @@ Permisos (D-R2-7, D-R2-8):
 - administrador o sin rol: nunca (el router ya responde 403; aquí es defensa en profundidad).
 En C3 y C4 un contacto inexistente o de un adulto no vinculado da el mismo error
 (404 sin revelar existencia, P18).
+Con PostgreSQL, un favorite_order ya usado por otro favorito activo del mismo adulto
+lanza ContactOrderInUseError (índice único de la base, plan ronda 3, D-R3-7).
 """
 import unicodedata
 from uuid import uuid4
@@ -17,6 +19,7 @@ from app.models.auth import AuthenticatedUser
 from app.models.contacts import Contact, ContactCreateRequest, ContactUpdateRequest
 from app.models.enums import Role
 from app.repositories.contact_repository import ContactRepository
+from app.repositories.errors import ContactOrderConflictError
 from app.repositories.user_repository import UserRepository
 
 
@@ -26,6 +29,10 @@ class ContactNotFoundError(Exception):
 
 class ContactPermissionDeniedError(Exception):
     """El usuario no puede gestionar los contactos de ese adulto."""
+
+
+class ContactOrderInUseError(Exception):
+    """Otro contacto favorito del mismo adulto ya usa ese favorite_order (D-R3-7)."""
 
 
 def list_contacts(adult_uid: str, contacts: ContactRepository) -> list[Contact]:
@@ -58,7 +65,10 @@ def create_contact(
         permissions=payload.permissions.model_copy(),
     )
     # Siempre el registro que devuelve el repositorio (D-R2-17).
-    return contacts.add(adult_uid, contact)
+    try:
+        return contacts.add(adult_uid, contact)
+    except ContactOrderConflictError as error:
+        raise ContactOrderInUseError("El orden de favorito ya está en uso.") from error
 
 
 def update_contact(
@@ -75,7 +85,10 @@ def update_contact(
     changes = payload.model_dump(exclude_unset=True)
     # model_validate (nunca model_copy(update=), que no valida) sobre el contacto completo.
     updated = Contact.model_validate({**current.model_dump(), **changes})
-    stored = contacts.update(adult_uid, updated)
+    try:
+        stored = contacts.update(adult_uid, updated)
+    except ContactOrderConflictError as error:
+        raise ContactOrderInUseError("El orden de favorito ya está en uso.") from error
     if stored is None:
         # Se borró entre la lectura y la escritura.
         raise ContactNotFoundError("El contacto no existe.")

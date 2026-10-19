@@ -27,8 +27,10 @@ from app.repositories.message_repository import (
 )
 from app.repositories.user_repository import UserRepository, get_user_repository
 from app.services.message_service import (
+    MESSAGE_RECIPIENT_UNAVAILABLE_DETAIL,
     MessageContactNotFoundError,
     MessagePermissionDeniedError,
+    MessageRecipientUnavailableError,
     list_conversation,
     send_message,
 )
@@ -74,6 +76,13 @@ def create_message(
         raise _contact_not_found() from error
     except MessagePermissionDeniedError as error:
         raise _forbidden() from error
+    except MessageRecipientUnavailableError as error:
+        # Solo con la base PostgreSQL y casi imposible desde V004: el contacto que
+        # escribe no tiene cuenta en la plataforma (D-R3-26a).
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=MESSAGE_RECIPIENT_UNAVAILABLE_DETAIL,
+        ) from error
 
 
 @router.get("", response_model=list[MessageResponse])

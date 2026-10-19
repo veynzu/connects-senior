@@ -1,9 +1,11 @@
 """Tests de contactos C1-C4 (tarea 2): rutas y servicio con repositorios InMemory reales."""
+from contextlib import contextmanager
 from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
 from app.core.security import (
     ADULT_ID_REQUIRED_DETAIL,
@@ -24,12 +26,18 @@ from app.repositories.contact_repository import (
     InMemoryContactRepository,
     get_contact_repository,
 )
+from app.repositories.contact_repository import (
+    FAVORITE_ORDER_CONSTRAINT,
+    SqlContactRepository,
+)
+from app.repositories.errors import ContactOrderConflictError
 from app.repositories.user_repository import (
     InMemoryUserRepository,
     get_user_repository,
 )
 from app.services.contact_service import (
     ContactNotFoundError,
+    ContactOrderInUseError,
     ContactPermissionDeniedError,
     create_contact,
     delete_contact,
@@ -1147,3 +1155,161 @@ def test_contact_routes_in_openapi():
     assert set(paths["/api/contacts/{contact_id}"]) == {"patch", "delete"}
     assert "204" in paths["/api/contacts/{contact_id}"]["delete"]["responses"]
     assert "200" in paths[CONTACTS_PATH]["post"]["responses"]
+
+
+# --- Ronda 3 (T-contacts): favorite_order repetido y límites de columna (D-R3-7, D-R3-26d) ---
+
+ORDER_IN_USE_DETAIL = "Datos inválidos: favorite_order: ya está en uso por otro contacto"
+
+
+class _OrderConflictContactRepository(InMemoryContactRepository):
+    """Repositorio falso: update se comporta como el índice único de favoritos de V003.
+
+    V004 quitó ese índice; la traducción a 422 se conserva y se prueba con este falso.
+    """
+
+    def update(self, adult_uid: str, contact: Contact) -> Contact | None:
+        raise ContactOrderConflictError("orden en uso")
+
+
+def test_update_contact_favorite_order_in_use_422(state, client):
+    conflicting = _OrderConflictContactRepository()
+    app.dependency_overrides[get_contact_repository] = lambda: conflicting
+    _as_user(Role.ADULTO_MAYOR)
+    original = conflicting.add(ADULT_UID, _contact())
+
+    response = client.patch(
+        _contact_path(), json={"is_favorite": True, "favorite_order": 1}
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": ORDER_IN_USE_DETAIL}
+    assert conflicting.get(ADULT_UID, CONTACT_ID) == original
+
+
+def test_create_contact_relationship_of_100_chars_200(state, client):
+    # relacion es varchar(100) en V004 (D-R3-26d): 100 caracteres se aceptan.
+    _as_user(Role.ADULTO_MAYOR)
+    relationship = "r" * 100
+
+    response = client.post(CONTACTS_PATH, json=_create_body(relationship=relationship))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["relationship"] == relationship
+    stored = state.contacts.get(ADULT_UID, body["id"])
+    assert stored is not None and stored.relationship == relationship
+
+
+def test_update_contact_relationship_of_100_chars_200(state, client):
+    _as_user(Role.ADULTO_MAYOR)
+    original = _seed_contact(state)
+    relationship = "r" * 100
+
+    response = client.patch(_contact_path(), json={"relationship": relationship})
+
+    assert response.status_code == 200
+    assert response.json() == {**original.model_dump(), "relationship": relationship}
+
+
+@pytest.mark.parametrize("method", ["POST", "PATCH"])
+def test_contact_relationship_longer_than_100_chars_422(state, client, method):
+    _as_user(Role.ADULTO_MAYOR)
+    original = _seed_contact(state)
+    relationship = "r" * 101
+
+    if method == "POST":
+        response = client.post(CONTACTS_PATH, json=_create_body(relationship=relationship))
+    else:
+        response = client.patch(_contact_path(), json={"relationship": relationship})
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Datos inválidos: relationship: es demasiado largo"}
+    assert state.contacts.list_for_adult(ADULT_UID) == [original]
+
+
+def test_update_contact_favorite_order_above_int4_422(state, client):
+    _as_user(Role.ADULTO_MAYOR)
+    original = _seed_contact(state)
+
+    response = client.patch(
+        _contact_path(), json={"is_favorite": True, "favorite_order": 2**31}
+    )
+    accepted = client.patch(
+        _contact_path(), json={"is_favorite": True, "favorite_order": 2**31 - 1}
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Datos inválidos: favorite_order: no es válido"}
+    assert accepted.status_code == 200
+    assert accepted.json() == {
+        **original.model_dump(),
+        "is_favorite": True,
+        "favorite_order": 2**31 - 1,
+    }
+
+
+# SqlContactRepository sin red: una conexión falsa lanza la IntegrityError del driver.
+
+
+class _FakeDiag:
+    def __init__(self, constraint_name: str) -> None:
+        self.constraint_name = constraint_name
+
+
+class _FakeDriverError(Exception):
+    def __init__(self, constraint_name: str) -> None:
+        super().__init__("error del driver")
+        self.diag = _FakeDiag(constraint_name)
+
+
+class _FailingConnection:
+    def __init__(self, constraint_name: str) -> None:
+        self._constraint_name = constraint_name
+
+    def execute(self, *args, **kwargs):
+        raise IntegrityError("SQL", {}, _FakeDriverError(self._constraint_name))
+
+
+class _FailingDatabase:
+    def __init__(self, constraint_name: str) -> None:
+        self._constraint_name = constraint_name
+
+    @contextmanager
+    def transaction(self):
+        yield _FailingConnection(self._constraint_name)
+
+
+@pytest.mark.parametrize("operation", ["add", "update"])
+def test_sql_contact_repository_translates_favorite_order_conflict(operation):
+    repo = SqlContactRepository(_FailingDatabase(FAVORITE_ORDER_CONSTRAINT))
+    contact = _contact("12", is_favorite=True, favorite_order=1)
+
+    with pytest.raises(ContactOrderConflictError) as exc_info:
+        getattr(repo, operation)(ADULT_UID, contact)
+
+    # La causa SQL no se encadena: su texto trae la sentencia y el DETAIL de Postgres.
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__suppress_context__ is True
+
+
+@pytest.mark.parametrize("operation", ["add", "update"])
+def test_sql_contact_repository_reraises_other_integrity_errors(operation):
+    repo = SqlContactRepository(_FailingDatabase("ck_adulto_contacto_nombre"))
+    contact = _contact("12")
+
+    with pytest.raises(IntegrityError):
+        getattr(repo, operation)(ADULT_UID, contact)
+
+
+def test_update_contact_service_translates_order_conflict(state):
+    conflicting = _OrderConflictContactRepository()
+    original = conflicting.add(ADULT_UID, _contact())
+    payload = ContactUpdateRequest(is_favorite=True, favorite_order=1)
+
+    with pytest.raises(ContactOrderInUseError):
+        update_contact(
+            _user(Role.ADULTO_MAYOR), CONTACT_ID, payload, conflicting, state.users
+        )
+
+    assert conflicting.get(ADULT_UID, CONTACT_ID) == original

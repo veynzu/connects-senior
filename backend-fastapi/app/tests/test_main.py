@@ -3,6 +3,7 @@ import logging
 import threading
 
 import pytest
+import sqlalchemy.exc
 from fastapi.testclient import TestClient
 from firebase_admin import messaging
 
@@ -17,8 +18,12 @@ from app.api import (
     reminders_router,
 )
 from app.core import scheduler
+from app.core.security import get_current_user
 from app.integrations import fcm_client
 from app.main import app
+from app.models.auth import AuthenticatedUser
+from app.models.enums import Role
+from app.repositories.contact_repository import get_contact_repository
 
 
 LOGIN_PATH = "/api/auth/login"
@@ -197,3 +202,199 @@ def test_conftest_guard_blocks_fcm_client_send(monkeypatch):
 
     with pytest.raises(RuntimeError, match=FCM_BLOCKED_MESSAGE):
         fcm_client.send_to_tokens(["token-a"], "Título", "Cuerpo", {"type": "demo"})
+
+
+# --- Ronda 3, F3: errores de la base de datos (D-R3-20) y rutas sin cambios ---
+
+DATABASE_UNAVAILABLE_DETAIL = "El servicio no está disponible. Intenta más tarde."
+DATABASE_DATA_ERROR_DETAIL = "Datos inválidos: cuerpo: no es válido"
+DATABASE_INTERNAL_ERROR_DETAIL = "Error interno. Intenta más tarde."
+CONTACTS_PATH = "/api/contacts"
+EXPECTED_PATHS = [
+    "/",
+    "/api/admin/users",
+    "/api/admin/users/{uid}",
+    "/api/alerts",
+    "/api/alerts/{alert_id}",
+    "/api/alerts/{alert_id}/acknowledge",
+    "/api/auth/adults",
+    "/api/auth/adults/{adult_id}/caregivers",
+    "/api/auth/devices",
+    "/api/auth/login",
+    "/api/auth/me",
+    "/api/auth/password-reset",
+    "/api/auth/refresh",
+    "/api/auth/register",
+    "/api/calls",
+    "/api/calls/voice-messages",
+    "/api/calls/voice-messages/{voice_message_id}/audio",
+    "/api/calls/{call_id}",
+    "/api/contacts",
+    "/api/contacts/{contact_id}",
+    "/api/messages",
+    "/api/reminders",
+    "/api/reminders/{reminder_id}",
+    "/api/reminders/{reminder_id}/confirm",
+    "/api/reminders/{reminder_id}/snooze",
+]
+
+
+@pytest.fixture
+def adult_with_failing_contacts():
+    """Adulto mayor autenticado cuyo repositorio de contactos lanza el error indicado."""
+
+    def install(error: Exception) -> None:
+        def failing_contact_repository():
+            raise error
+
+        app.dependency_overrides[get_contact_repository] = failing_contact_repository
+
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
+        uid="adulto-1", role=Role.ADULTO_MAYOR
+    )
+    try:
+        yield install
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        sqlalchemy.exc.OperationalError("SELECT 1", {}, Exception("x")),
+        sqlalchemy.exc.InterfaceError("SELECT 1", {}, Exception("x")),
+        sqlalchemy.exc.TimeoutError("SELECT 1"),
+    ],
+    ids=["operational", "interface", "pool-timeout"],
+)
+def test_database_unavailable_returns_503_text(adult_with_failing_contacts, caplog, error):
+    adult_with_failing_contacts(error)
+
+    with caplog.at_level(logging.WARNING, logger="app.main"):
+        response = TestClient(app).get(CONTACTS_PATH)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": DATABASE_UNAVAILABLE_DETAIL}
+    assert type(error).__name__ in caplog.text
+    assert "SELECT 1" not in caplog.text
+
+
+def test_database_data_error_returns_422_text(adult_with_failing_contacts, caplog):
+    adult_with_failing_contacts(
+        sqlalchemy.exc.DataError("INSERT INTO dato VALUES (1)", {}, Exception("x"))
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.main"):
+        response = TestClient(app).get(CONTACTS_PATH)
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": DATABASE_DATA_ERROR_DETAIL}
+    assert "DataError" in caplog.text
+    assert "INSERT" not in caplog.text
+
+
+def test_database_integrity_error_returns_500_text(adult_with_failing_contacts, caplog):
+    adult_with_failing_contacts(
+        sqlalchemy.exc.IntegrityError("INSERT", {}, Exception("x"))
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.main"):
+        response = TestClient(app).get(CONTACTS_PATH)
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": DATABASE_INTERNAL_ERROR_DETAIL}
+    assert caplog.messages == [
+        "La base de datos falló de forma inesperada (IntegrityError)"
+    ]
+    assert "x" not in caplog.text
+    assert "INSERT" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        sqlalchemy.exc.ProgrammingError("SELECT 1", {}, Exception("x")),
+        sqlalchemy.exc.NoResultFound(),
+        sqlalchemy.exc.SQLAlchemyError("SELECT 1"),
+    ],
+    ids=["programming", "no-result", "base"],
+)
+def test_other_sqlalchemy_errors_return_500_text(adult_with_failing_contacts, caplog, error):
+    adult_with_failing_contacts(error)
+
+    with caplog.at_level(logging.WARNING, logger="app.main"):
+        response = TestClient(app).get(CONTACTS_PATH)
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": DATABASE_INTERNAL_ERROR_DETAIL}
+    assert type(error).__name__ in caplog.text
+    assert "SELECT 1" not in caplog.text
+
+
+class _FakeDiag:
+    constraint_name = "uq_adulto_contacto_orden_favorito"
+
+
+class _FakePostgresError(Exception):
+    """Causa del driver con diag.constraint_name, como psycopg.errors.UniqueViolation."""
+
+    diag = _FakeDiag()
+
+
+@pytest.mark.parametrize(
+    "error_class, status_code, detail",
+    [
+        (sqlalchemy.exc.OperationalError, 503, DATABASE_UNAVAILABLE_DETAIL),
+        (sqlalchemy.exc.DataError, 422, DATABASE_DATA_ERROR_DETAIL),
+        (sqlalchemy.exc.IntegrityError, 500, DATABASE_INTERNAL_ERROR_DETAIL),
+    ],
+    ids=["503", "422", "500"],
+)
+def test_database_handlers_log_only_type_and_constraint(
+    adult_with_failing_contacts, caplog, error_class, status_code, detail
+):
+    # Cada handler responde lo suyo (Starlette elige por el MRO de la excepción) y el log
+    # nunca lleva la sentencia, los parámetros ni el DETAIL de Postgres.
+    orig = _FakePostgresError(
+        "duplicate key value; DETAIL: Key (correo)=(ana@example.invalid) already exists."
+    )
+    adult_with_failing_contacts(
+        error_class(
+            "INSERT INTO connects_senior.usuario (correo) VALUES (%(correo)s)",
+            {"correo": "ana@example.invalid"},
+            orig,
+        )
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.main"):
+        response = TestClient(app).get(CONTACTS_PATH)
+
+    assert response.status_code == status_code
+    assert response.json() == {"detail": detail}
+    assert (
+        f"({error_class.__name__}, restricción uq_adulto_contacto_orden_favorito)"
+        in caplog.text
+    )
+    assert "ana@example.invalid" not in caplog.text
+    assert "INSERT" not in caplog.text
+    assert "duplicate" not in caplog.text
+
+
+def test_database_error_handlers_are_registered_by_class():
+    handlers = app.exception_handlers
+
+    for error_class in (
+        sqlalchemy.exc.OperationalError,
+        sqlalchemy.exc.InterfaceError,
+        sqlalchemy.exc.TimeoutError,
+    ):
+        assert handlers[error_class] is main_module.database_unavailable_handler
+    assert handlers[sqlalchemy.exc.DataError] is main_module.database_data_error_handler
+    assert (
+        handlers[sqlalchemy.exc.SQLAlchemyError]
+        is main_module.database_internal_error_handler
+    )
+
+
+def test_openapi_still_has_the_25_contract_paths():
+    assert sorted(app.openapi()["paths"]) == EXPECTED_PATHS

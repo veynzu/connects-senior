@@ -7,6 +7,11 @@ Push de llamada entrante (P20, D-R2-16): si el contacto corresponde a una cuenta
 verificada con dispositivo registrado, L1 crea un segundo meeting token para esa
 persona y se lo envía por push. Ese paso nunca hace fallar L1, y el token del
 contacto no se guarda ni se registra en el log.
+
+start_call es async: los repositorios (síncronos y, con SQL, con red) se llaman solo
+desde funciones síncronas internas ejecutadas con run_in_threadpool (D-R3-15). La
+resolución del destinatario y la push van después de guardar y dentro de
+try/except: un fallo ahí nunca convierte en error una llamada ya guardada (D-R3-23).
 """
 import logging
 from datetime import datetime, timezone
@@ -58,9 +63,9 @@ async def start_call(
     users: UserRepository,
     devices: DeviceRepository,
 ) -> CallStartResponse:
-    contact = contacts.get(adult.uid, payload.contact_id)
-    if contact is None:
-        raise ContactNotFoundError("El contacto no existe.")
+    contact = await run_in_threadpool(
+        _resolve_contact, adult.uid, payload.contact_id, contacts
+    )
 
     allowed = (
         contact.permissions.calls
@@ -80,7 +85,8 @@ async def start_call(
     )
 
     # Solo se guarda cuando Daily respondió bien; si falla, la sala huérfana expira sola.
-    record = calls.add(
+    record = await run_in_threadpool(
+        _persist_call,
         CallRecord(
             id=str(uuid4()),
             adult_uid=adult.uid,
@@ -91,10 +97,45 @@ async def start_call(
             room_name=room.name,
             room_url=room.url,
             room_expires_at=room.expires_at,
-        )
+        ),
+        calls,
     )
-    await _notify_callee(adult, contact, record, daily, users, devices)
+    try:
+        await _notify_callee(adult, contact, record, daily, users, devices)
+    except Exception as error:
+        # _notify_callee no lanza; defensa en profundidad: la llamada ya está guardada.
+        logger.error(
+            "No se pudo avisar al contacto de la llamada (%s)", type(error).__name__
+        )
     return CallStartResponse(call_id=record.id, room_url=record.room_url, token=token)
+
+
+def _resolve_contact(
+    adult_uid: str, contact_id: str, contacts: ContactRepository
+) -> Contact:
+    """Contacto del adulto o ContactNotFoundError. Síncrona: va por run_in_threadpool."""
+    contact = contacts.get(adult_uid, contact_id)
+    if contact is None:
+        raise ContactNotFoundError("El contacto no existe.")
+    return contact
+
+
+def _persist_call(record: CallRecord, calls: CallRepository) -> CallRecord:
+    """Guarda la llamada. Síncrona: va por run_in_threadpool (D-R3-15)."""
+    return calls.add(record)
+
+
+def _resolve_callee(
+    contact: Contact, users: UserRepository, devices: DeviceRepository
+) -> str | None:
+    """uid verificado del contacto con dispositivo registrado, o None.
+
+    Síncrona: va por run_in_threadpool (D-R3-15).
+    """
+    callee_uid = push_service.linked_uid_for_contact(contact, users)
+    if callee_uid is None or not devices.has_device(callee_uid):
+        return None
+    return callee_uid
 
 
 async def _notify_callee(
@@ -108,11 +149,20 @@ async def _notify_callee(
     """Push de llamada entrante al contacto (D-R2-16); nunca lanza.
 
     Sin uid verificado para el contacto o sin dispositivo registrado no se hace nada
-    (ni siquiera se pide el segundo token). Si Daily falla al crear el token del
-    contacto o la push falla, solo se registra el tipo del error.
+    (ni siquiera se pide el segundo token). Si la resolución del destinatario falla
+    (D-R3-23), si Daily falla al crear el token del contacto o si la push falla, solo
+    se registra el tipo del error.
     """
-    callee_uid = push_service.linked_uid_for_contact(contact, users)
-    if callee_uid is None or not devices.has_device(callee_uid):
+    try:
+        callee_uid = await run_in_threadpool(_resolve_callee, contact, users, devices)
+    except Exception as error:
+        # La llamada ya está guardada: L1 responde 200 igual (D-R3-23).
+        logger.error(
+            "No se pudo resolver el destinatario de la llamada (%s)",
+            type(error).__name__,
+        )
+        return
+    if callee_uid is None:
         return
 
     try:

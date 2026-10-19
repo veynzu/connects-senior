@@ -8,9 +8,11 @@ lee como el contacto cuyo email coincide con el email verificado de su token
 para ambas partes.
 
 No conoce FastAPI: lanza excepciones de dominio que el router traduce. La push al
-destinatario nunca hace fallar el envío (push_service.notify_users no lanza) y nunca
-se registra el texto del mensaje.
+destinatario nunca hace fallar el envío: push_service.notify_users no lanza y la
+resolución del destinatario y del nombre del emisor, que se hace después de guardar,
+queda protegida (D-R3-23). Nunca se registra el texto del mensaje.
 """
+import logging
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -24,6 +26,7 @@ from app.models.messages import (
 )
 from app.repositories.contact_repository import ContactRepository
 from app.repositories.device_repository import DeviceRepository
+from app.repositories.errors import RecipientNotLinkedError
 from app.repositories.message_repository import MessageRepository
 from app.repositories.user_repository import UserRepository
 from app.services import push_service
@@ -39,6 +42,9 @@ from app.services.contact_scope import (
 MESSAGE_PUSH_TITLE = "Nuevo mensaje"
 MESSAGE_PUSH_BODY_MAX_LENGTH = 120
 MESSAGE_PUSH_TYPE = "message"
+MESSAGE_RECIPIENT_UNAVAILABLE_DETAIL = "El contacto no tiene una cuenta en Connects Senior."
+
+logger = logging.getLogger(__name__)
 
 
 class MessageContactNotFoundError(Exception):
@@ -47,6 +53,16 @@ class MessageContactNotFoundError(Exception):
 
 class MessagePermissionDeniedError(Exception):
     """Sin permiso: rol sin acceso, contacto no vinculado al llamante o messages en false."""
+
+
+class MessageRecipientUnavailableError(Exception):
+    """El contacto no tiene una cuenta de la plataforma con la que guardar el mensaje.
+
+    Solo con la base PostgreSQL y, desde V004, solo cuando escribe el contacto y su
+    usuario emisor no se resuelve (D-R3-26a; en la práctica no ocurre, y el adulto sí
+    puede escribir a un contacto sin cuenta). El router responde 422 con
+    MESSAGE_RECIPIENT_UNAVAILABLE_DETAIL.
+    """
 
 
 def _resolve_scope(
@@ -110,9 +126,13 @@ def send_message(
 ) -> MessageCreateResponse:
     """M1: guarda el mensaje y avisa por push al destinatario si es alcanzable.
 
-    Lanza MessageContactNotFoundError (contacto inexistente o fuera del alcance) o
+    Lanza MessageContactNotFoundError (contacto inexistente o fuera del alcance),
     MessagePermissionDeniedError (rol sin acceso, contacto no vinculado al familiar o
-    cuidador, o permissions.messages en false). Síncrona: la push hace red.
+    cuidador, o permissions.messages en false) o MessageRecipientUnavailableError (el
+    repositorio no puede guardar el mensaje porque el contacto que escribe no tiene
+    cuenta, D-R3-26a).
+    Síncrona: la push hace red. Una vez guardado el mensaje, ningún fallo al resolver el
+    destinatario o al enviar la push cambia la respuesta (D-R3-23).
     """
     scope = _resolve_scope(user, payload.contact_id, contacts, users)
     if not scope.contact.permissions.messages:
@@ -121,31 +141,44 @@ def send_message(
     created_at = (now if now is not None else datetime.now(timezone.utc)).replace(
         microsecond=0
     )
-    record = messages.add(
-        MessageRecord(
-            id=str(uuid4()),
-            adult_uid=scope.adult_uid,
-            contact_id=scope.contact.id,
-            text=payload.text,
-            created_at=created_at,
-            from_adult=scope.from_adult,
+    try:
+        record = messages.add(
+            MessageRecord(
+                id=str(uuid4()),
+                adult_uid=scope.adult_uid,
+                contact_id=scope.contact.id,
+                text=payload.text,
+                created_at=created_at,
+                from_adult=scope.from_adult,
+            )
         )
-    )
+    except RecipientNotLinkedError as error:
+        raise MessageRecipientUnavailableError(
+            MESSAGE_RECIPIENT_UNAVAILABLE_DETAIL
+        ) from error
 
-    recipient_uid = _recipient_uid(scope, users)
-    if recipient_uid is not None:
-        push_service.notify_users(
-            [recipient_uid],
-            MESSAGE_PUSH_TITLE,
-            record.text[:MESSAGE_PUSH_BODY_MAX_LENGTH],
-            {
-                "type": MESSAGE_PUSH_TYPE,
-                "message_id": record.id,
-                "contact_id": record.contact_id,
-                "adult_id": record.adult_uid,
-                "from_name": _sender_name(user, scope, users),
-            },
-            devices,
+    # D-R3-23: el mensaje ya está guardado; con la base SQL resolver el destinatario y el
+    # nombre del emisor hace red, y un fallo ahí no puede convertir M1 en un error (el
+    # front reintentaría y duplicaría el mensaje). Solo se registra el tipo del error.
+    try:
+        recipient_uid = _recipient_uid(scope, users)
+        if recipient_uid is not None:
+            push_service.notify_users(
+                [recipient_uid],
+                MESSAGE_PUSH_TITLE,
+                record.text[:MESSAGE_PUSH_BODY_MAX_LENGTH],
+                {
+                    "type": MESSAGE_PUSH_TYPE,
+                    "message_id": record.id,
+                    "contact_id": record.contact_id,
+                    "adult_id": record.adult_uid,
+                    "from_name": _sender_name(user, scope, users),
+                },
+                devices,
+            )
+    except Exception as error:
+        logger.error(
+            "No se pudo avisar por push del mensaje guardado (%s)", type(error).__name__
         )
 
     return MessageCreateResponse(id=record.id, created_at=record.created_at)

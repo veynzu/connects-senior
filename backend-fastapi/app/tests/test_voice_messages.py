@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 from starlette.datastructures import Headers, UploadFile
 
 from app.api import calls_router
@@ -37,6 +38,7 @@ from app.repositories.user_repository import (
     InMemoryUserRepository,
     get_user_repository,
 )
+from app.repositories.errors import RecipientNotLinkedError
 from app.repositories.voice_message_repository import (
     InMemoryVoiceMessageRepository,
     get_voice_message_repository,
@@ -1214,3 +1216,72 @@ def test_openapi_lists_voice_message_routes():
     audio_operation = paths[f"{VOICE_PATH}/{{voice_message_id}}/audio"]["get"]
     assert "security" not in audio_operation
     assert "audio/webm" in audio_operation["responses"]["200"]["content"]
+
+
+# --- Ronda 3 (D-R3-15, D-R3-23): repositorio SQL y destinatario de la push ---
+
+
+class RecipientNotLinkedVoiceMessages(InMemoryVoiceMessageRepository):
+    """Como el repositorio SQL cuando el contacto no es un usuario de la plataforma."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempts = 0
+
+    def add(self, record: VoiceMessageRecord) -> VoiceMessageRecord:
+        self.attempts += 1
+        raise RecipientNotLinkedError("El contacto no es un usuario de la plataforma.")
+
+
+def test_v1_recipient_not_linked_403_and_audio_file_deleted(state, client, monkeypatch):
+    failing_repository = RecipientNotLinkedVoiceMessages()
+    app.dependency_overrides[get_voice_message_repository] = lambda: failing_repository
+    deleted: list[tuple[Path, bool]] = []
+    original_delete = voice_message_service._delete_quietly
+
+    def spy_delete(path: Path) -> None:
+        deleted.append((path, path.exists()))
+        original_delete(path)
+
+    monkeypatch.setattr(voice_message_service, "_delete_quietly", spy_delete)
+    state.devices.register(ADULT_UID, ADULT_FCM_TOKEN)
+    _as(_adult_user())
+
+    response = _post_voice(client)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": FORBIDDEN_DETAIL}
+    assert failing_repository.attempts == 1
+    # El audio llegó a escribirse y se borró al fallar el registro: no queda huérfano.
+    assert len(deleted) == 1
+    deleted_path, existed = deleted[0]
+    assert existed is True
+    assert deleted_path.parent == state.storage
+    assert not deleted_path.exists()
+    assert _stored_files(state) == []
+    assert state.push.calls == []
+
+
+def test_v1_adult_recipient_lookup_database_error_still_201(
+    state, client, caplog, monkeypatch
+):
+    state.users.mark_email_verified(FAMILY_UID, FAMILY_EMAIL)
+    state.devices.register(FAMILY_UID, FAMILY_FCM_TOKEN)
+
+    def failing_lookup(email):
+        raise OperationalError("x", {}, Exception("x"))
+
+    monkeypatch.setattr(state.users, "find_uid_by_verified_email", failing_lookup)
+    _as(_adult_user())
+
+    with caplog.at_level(logging.ERROR, logger=SERVICE_LOGGER):
+        response = _post_voice(client)
+
+    assert response.status_code == 201
+    record = state.voice_messages.get(response.json()["id"])
+    assert record is not None
+    assert record.adult_uid == ADULT_UID
+    assert record.from_adult is True
+    assert (state.storage / record.file_name).read_bytes() == WEBM
+    assert state.push.calls == []
+    assert "OperationalError" in caplog.text
