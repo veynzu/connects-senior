@@ -10,6 +10,11 @@
 No conoce FastAPI: lanza excepciones de dominio que el router traduce. Nunca se
 registran la clave de firma, firmas, rutas del sistema de archivos ni el contenido de
 las push.
+
+save_voice_message es async: los repositorios (síncronos y, con SQL, con red) se
+llaman solo desde funciones síncronas internas ejecutadas con run_in_threadpool
+(D-R3-15). La resolución del destinatario y la push van después de guardar y dentro
+de try/except: un fallo ahí nunca convierte en error un mensaje ya guardado (D-R3-23).
 """
 import hashlib
 import hmac
@@ -36,6 +41,7 @@ from app.models.voice_messages import (
 )
 from app.repositories.contact_repository import ContactRepository
 from app.repositories.device_repository import DeviceRepository
+from app.repositories.errors import RecipientNotLinkedError
 from app.repositories.user_repository import UserRepository
 from app.repositories.voice_message_repository import VoiceMessageRepository
 from app.services import push_service
@@ -314,6 +320,38 @@ def _push_recipient(scope: ContactScope, users: UserRepository) -> str | None:
     return uid
 
 
+def _persist_voice_message(
+    user: AuthenticatedUser,
+    scope: ContactScope,
+    file_name: str,
+    size_bytes: int,
+    users: UserRepository,
+    voice_messages: VoiceMessageRepository,
+    now: datetime | None,
+) -> tuple[VoiceMessageRecord, str]:
+    """from_name y registro del mensaje; devuelve (registro, from_name).
+
+    Síncrona: va por run_in_threadpool (D-R3-15). Un repositorio SQL lanza
+    RecipientNotLinkedError si el contacto no corresponde a un usuario de la
+    plataforma distinto del adulto (D-R3-13).
+    """
+    from_name = _sender_name(user, scope, users)
+    record = voice_messages.add(
+        VoiceMessageRecord(
+            id=str(uuid4()),
+            adult_uid=scope.adult_uid,
+            contact_id=scope.contact.id,
+            from_adult=scope.from_adult,
+            from_name=from_name,
+            file_name=file_name,
+            content_type=AUDIO_CONTENT_TYPE,
+            size_bytes=size_bytes,
+            created_at=_now(now),
+        )
+    )
+    return record, from_name
+
+
 def _delete_quietly(path: Path) -> None:
     try:
         path.unlink(missing_ok=True)
@@ -385,7 +423,9 @@ async def save_voice_message(
     tipo de medio (422), Content-Length (422), directorio (503), lectura por bloques
     (422 o 503), registro y push (una push que falla no cambia el 201).
     """
-    scope = _resolve_scope(user, contact_id.strip(), contacts, users)
+    scope = await run_in_threadpool(
+        _resolve_scope, user, contact_id.strip(), contacts, users
+    )
     if not scope.contact.permissions.messages:
         raise VoicePermissionDeniedError(FORBIDDEN_DETAIL)
     if _media_type(upload) != AUDIO_CONTENT_TYPE:
@@ -398,27 +438,33 @@ async def save_voice_message(
     directory = await run_in_threadpool(storage_dir, settings)
     file_name, size_bytes = await _store_upload(upload, directory, max_bytes)
 
-    from_name = _sender_name(user, scope, users)
     try:
-        record = voice_messages.add(
-            VoiceMessageRecord(
-                id=str(uuid4()),
-                adult_uid=scope.adult_uid,
-                contact_id=scope.contact.id,
-                from_adult=scope.from_adult,
-                from_name=from_name,
-                file_name=file_name,
-                content_type=AUDIO_CONTENT_TYPE,
-                size_bytes=size_bytes,
-                created_at=_now(now),
-            )
+        record, from_name = await run_in_threadpool(
+            _persist_voice_message,
+            user,
+            scope,
+            file_name,
+            size_bytes,
+            users,
+            voice_messages,
+            now,
         )
+    except RecipientNotLinkedError as error:
+        # El destinatario no es un usuario de la plataforma: 403 y sin archivo huérfano.
+        await run_in_threadpool(_delete_quietly, directory / file_name)
+        raise VoicePermissionDeniedError(FORBIDDEN_DETAIL) from error
     except BaseException:
         # Sin registro el archivo quedaría huérfano.
         await run_in_threadpool(_delete_quietly, directory / file_name)
         raise
 
-    await _notify_recipient(scope, record, from_name, users, devices)
+    try:
+        await _notify_recipient(scope, record, from_name, users, devices)
+    except Exception as error:
+        # _notify_recipient no lanza; defensa en profundidad: el mensaje ya se guardó.
+        logger.error(
+            "No se pudo avisar del mensaje de voz (%s)", type(error).__name__
+        )
     return VoiceMessageCreateResponse(id=record.id, created_at=record.created_at)
 
 
@@ -429,7 +475,16 @@ async def _notify_recipient(
     users: UserRepository,
     devices: DeviceRepository,
 ) -> None:
-    recipient = _push_recipient(scope, users)
+    """Push al destinatario del mensaje de voz; nunca lanza (D-R3-23)."""
+    try:
+        recipient = await run_in_threadpool(_push_recipient, scope, users)
+    except Exception as error:
+        # El mensaje ya se guardó: V1 responde 201 igual.
+        logger.error(
+            "No se pudo resolver el destinatario del mensaje de voz (%s)",
+            type(error).__name__,
+        )
+        return
     if recipient is None:
         return
     data = {

@@ -44,6 +44,7 @@ class ContactCreateRequest(BaseModel):
     adult_id: str | None = None
     first_name: str = Field(min_length=1, max_length=100)
     last_name: str = Field(min_length=1, max_length=100)
+    # relacion es varchar(100) en adulto_contacto (esquema V004, plan ronda 3, D-R3-26(d)).
     relationship: str = Field(min_length=1, max_length=100)
     phone: str | None = Field(default=None, max_length=50)
     email: str | None = Field(default=None, max_length=320)
@@ -75,7 +76,8 @@ class ContactUpdateRequest(BaseModel):
     photo_url: str | None = None
     permissions: ContactPermissions | None = None
     is_favorite: bool | None = None
-    favorite_order: int | None = Field(default=None, ge=0)
+    # orden_favorito es integer (int4) en adulto_contacto (plan ronda 3, D-R3-7).
+    favorite_order: int | None = Field(default=None, ge=0, le=2147483647)
 
     _not_null = field_validator(
         "first_name",

@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from firebase_admin import auth as firebase_auth
 from firebase_admin import exceptions as firebase_exceptions
+from sqlalchemy.exc import OperationalError
 
 from app.api import auth_router
 from app.core import security
@@ -2569,3 +2570,105 @@ def test_openapi_lists_account_routes():
     assert "201" in paths["/api/auth/adults/{adult_id}/caregivers"]["post"]["responses"]
     assert "204" in paths["/api/auth/password-reset"]["post"]["responses"]
     assert "204" in paths["/api/auth/devices"]["post"]["responses"]
+
+
+# --- Ronda 3 (D-R3-15): compensación en Firebase si falla la persistencia ---
+
+
+DATABASE_UNAVAILABLE_DETAIL = "El servicio no está disponible. Intenta más tarde."
+
+
+def _raise_database_unavailable(*args, **kwargs):
+    raise OperationalError("x", {}, Exception("x"))
+
+
+@pytest.mark.parametrize("delete_fails", [False, True], ids=["deleted", "delete_fails"])
+def test_register_profile_database_error_503_deletes_new_account(
+    web_api_key, firebase, rest, account_state, monkeypatch, delete_fails
+):
+    if delete_fails:
+        # Aunque la compensación falle, sale la excepción original (503 de la base).
+        firebase.delete_error = firebase_exceptions.UnavailableError("mensaje-interno")
+    monkeypatch.setattr(
+        account_state.users, "add_profile", _raise_database_unavailable
+    )
+
+    response = TestClient(app).post(REGISTER_PATH, json=REGISTER_BODY)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": DATABASE_UNAVAILABLE_DETAIL}
+    assert firebase.deleted == [NEW_UID]
+    assert firebase.events == ["create_user", "set_custom_user_claims", "delete_user"]
+    # Ni inicio de sesión ni correo de verificación.
+    assert rest.seen == []
+    assert account_state.users.get_profile(NEW_UID) is None
+
+
+@pytest.mark.parametrize("failing_method", ["add_profile", "link_adult"])
+def test_create_adult_database_error_503_deletes_new_account(
+    firebase, account_state, monkeypatch, failing_method
+):
+    _as_user(FAMILY_UID, Role.FAMILIAR)
+    firebase.next_uid = ADULT_UID
+    monkeypatch.setattr(
+        account_state.users, failing_method, _raise_database_unavailable
+    )
+
+    response = TestClient(app).post(ADULTS_PATH, json=ADULT_BODY)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": DATABASE_UNAVAILABLE_DETAIL}
+    assert firebase.deleted == [ADULT_UID]
+    assert firebase.events == ["create_user", "set_custom_user_claims", "delete_user"]
+
+
+@pytest.mark.parametrize("failing_method", ["add_profile", "link_adult"])
+def test_create_caregiver_new_database_error_503_deletes_new_account(
+    web_api_key, firebase, rest, account_state, monkeypatch, failing_method
+):
+    _seed_family_link(account_state.users)
+    _as_user(FAMILY_UID, Role.FAMILIAR)
+    firebase.next_uid = CAREGIVER_UID
+    rest.routes[OOB_ROUTE] = _oob_ok
+    monkeypatch.setattr(
+        account_state.users, failing_method, _raise_database_unavailable
+    )
+
+    response = TestClient(app).post(
+        CAREGIVERS_PATH.format(adult_id=ADULT_UID), json=CAREGIVER_BODY
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": DATABASE_UNAVAILABLE_DETAIL}
+    assert firebase.deleted == [CAREGIVER_UID]
+    assert firebase.events == [
+        "get_user_by_email",
+        "create_user",
+        "set_custom_user_claims",
+        "delete_user",
+    ]
+    # Sin cuenta no hay invitación.
+    assert rest.seen == []
+
+
+def test_create_caregiver_existing_database_error_503_never_deletes_account(
+    web_api_key, firebase, rest, account_state, monkeypatch
+):
+    _seed_family_link(account_state.users)
+    firebase.existing["luis@example.com"] = (CAREGIVER_UID, {"role": "cuidador"})
+    _as_user(FAMILY_UID, Role.FAMILIAR)
+    monkeypatch.setattr(
+        account_state.users, "link_adult", _raise_database_unavailable
+    )
+
+    response = TestClient(app).post(
+        CAREGIVERS_PATH.format(adult_id=ADULT_UID), json=CAREGIVER_BODY
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": DATABASE_UNAVAILABLE_DETAIL}
+    # La cuenta del cuidador ya existía: nunca se borra.
+    assert firebase.deleted == []
+    assert "delete_user" not in firebase.events
+    assert firebase.created == []
+    assert rest.seen == []

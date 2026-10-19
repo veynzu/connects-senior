@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
 from app.core.security import FORBIDDEN_DETAIL, get_current_user
 from app.integrations import fcm_client
@@ -23,6 +24,7 @@ from app.repositories.device_repository import (
     InMemoryDeviceRepository,
     get_device_repository,
 )
+from app.repositories.errors import RecipientNotLinkedError
 from app.repositories.message_repository import (
     InMemoryMessageRepository,
     get_message_repository,
@@ -906,3 +908,110 @@ def test_message_repository_stable_ascending_order_and_copies():
 def test_get_message_repository_returns_shared_default():
     assert get_message_repository() is get_message_repository()
     assert isinstance(get_message_repository(), InMemoryMessageRepository)
+
+
+# --- Base PostgreSQL: contacto sin cuenta y push protegida (ronda 3, D-R3-12, D-R3-23) ---
+
+RECIPIENT_UNAVAILABLE_DETAIL = "El contacto no tiene una cuenta en Connects Senior."
+MESSAGE_SERVICE_LOGGER = "app.services.message_service"
+NO_ACCOUNT_CONTACT_ID = "contact-without-account"
+
+
+class _RecipientNotLinkedMessageRepository(InMemoryMessageRepository):
+    """Simula la implementación SQL con un contacto sin cuenta: add no puede guardar."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.add_calls = 0
+
+    def add(self, record: MessageRecord) -> MessageRecord:
+        self.add_calls += 1
+        raise RecipientNotLinkedError("sin usuario del contacto")
+
+
+class _FailingUserRepository:
+    """Envuelve el repositorio de usuarios; un método falla como con la base caída."""
+
+    def __init__(self, inner: InMemoryUserRepository, failing_method: str) -> None:
+        self._inner = inner
+        self._failing_method = failing_method
+        self.failures = 0
+
+    def __getattr__(self, name: str):
+        attribute = getattr(self._inner, name)
+        if name != self._failing_method:
+            return attribute
+
+        def fail(*args, **kwargs):
+            self.failures += 1
+            raise OperationalError("x", {}, Exception("x"))
+
+        return fail
+
+
+@pytest.mark.parametrize("user_factory", [_adult, _family], ids=["adult", "family"])
+def test_m1_recipient_without_account_422_exact_detail(state, client, user_factory):
+    _make_family_reachable(state)
+    failing = _RecipientNotLinkedMessageRepository()
+    app.dependency_overrides[get_message_repository] = lambda: failing
+    _as(user_factory())
+
+    response = client.post(MESSAGES_PATH, json={"contact_id": CONTACT_ID, "text": "Hola"})
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": RECIPIENT_UNAVAILABLE_DETAIL}
+    assert failing.add_calls == 1
+    assert failing.list_conversation(ADULT_UID, CONTACT_ID) == []
+    assert state.push.calls == []
+
+
+def test_m1_in_memory_still_saves_message_to_contact_without_account(state, client):
+    # Con InMemory (sqlite en DATABASE_URL) no hay usuario que exigir: se guarda como antes.
+    state.contacts.add(ADULT_UID, _contact(NO_ACCOUNT_CONTACT_ID, email=None))
+    _as(_adult())
+
+    response = client.post(
+        MESSAGES_PATH, json={"contact_id": NO_ACCOUNT_CONTACT_ID, "text": "Hola"}
+    )
+
+    assert response.status_code == 201
+    stored = state.messages.list_conversation(ADULT_UID, NO_ACCOUNT_CONTACT_ID)
+    assert [(record.id, record.text, record.from_adult) for record in stored] == [
+        (response.json()["id"], "Hola", True)
+    ]
+    assert state.push.calls == []
+    listed = client.get(MESSAGES_PATH, params={"contact_id": NO_ACCOUNT_CONTACT_ID})
+    assert [(item["id"], item["from_me"]) for item in listed.json()] == [
+        (response.json()["id"], True)
+    ]
+
+
+@pytest.mark.parametrize(
+    "failing_method", ["find_uid_by_verified_email", "is_linked", "get_profile"]
+)
+def test_m1_recipient_resolution_failure_after_saving_still_201(
+    state, client, caplog, failing_method
+):
+    # D-R3-23: con la base caída después de guardar, M1 no puede responder 503.
+    _make_family_reachable(state)
+    users = _FailingUserRepository(state.users, failing_method)
+    app.dependency_overrides[get_user_repository] = lambda: users
+    _as(_adult())
+    secret_text = "Texto privado del mensaje"
+
+    with caplog.at_level(logging.ERROR, logger=MESSAGE_SERVICE_LOGGER):
+        response = client.post(
+            MESSAGES_PATH, json={"contact_id": CONTACT_ID, "text": secret_text}
+        )
+
+    assert response.status_code == 201
+    stored = state.messages.list_conversation(ADULT_UID, CONTACT_ID)
+    assert [(record.id, record.text) for record in stored] == [
+        (response.json()["id"], secret_text)
+    ]
+    assert users.failures == 1
+    assert state.push.calls == []
+    assert any(record.name == MESSAGE_SERVICE_LOGGER for record in caplog.records)
+    assert "OperationalError" in caplog.text
+    assert secret_text not in caplog.text
+    assert FAMILY_EMAIL not in caplog.text

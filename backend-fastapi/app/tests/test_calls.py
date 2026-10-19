@@ -8,6 +8,7 @@ from uuid import UUID
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
 from app.api.calls_router import CALLS_UNAVAILABLE_DETAIL
 from app.core.security import FORBIDDEN_DETAIL, get_current_user
@@ -996,3 +997,36 @@ def test_callee_token_not_stored_nor_logged(state, client, caplog, push_fails):
     assert callee_token not in {str(value) for value in asdict(record).values()}
     assert callee_token not in caplog.text
     assert CONTACT_FCM_TOKEN not in caplog.text
+
+
+# --- Ronda 3 (D-R3-15, D-R3-23): la resolución del destinatario no tumba L1 ---
+
+
+def test_l1_callee_lookup_database_error_still_200_and_call_saved(
+    state, client, caplog, monkeypatch
+):
+    _as_user(Role.ADULTO_MAYOR)
+    state.contacts.add(ADULT_UID, _contact(email=CONTACT_EMAIL))
+    _link_contact_account(state)
+
+    def failing_lookup(email):
+        raise OperationalError("x", {}, Exception("x"))
+
+    monkeypatch.setattr(state.users, "find_uid_by_verified_email", failing_lookup)
+
+    with caplog.at_level(logging.ERROR, logger="app.services.call_service"):
+        response = client.post(CALLS_PATH, json={"contact_id": CONTACT_ID})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["room_url"] == ROOM_URL
+    assert body["token"] == f"token-{ADULT_UID}"
+    record = state.calls.get(ADULT_UID, body["call_id"])
+    assert record is not None
+    assert record.status == CallStatus.NO_CONTESTADA
+    # Sin destinatario resuelto no se pide el segundo token ni se envía push.
+    assert state.daily.token_calls == [
+        _adult_token_call(False, state.daily.expires_at)
+    ]
+    assert state.push.calls == []
+    assert "OperationalError" in caplog.text

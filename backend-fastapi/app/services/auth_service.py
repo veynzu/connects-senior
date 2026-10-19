@@ -530,15 +530,7 @@ async def register_family(
         _display_name(payload.first_name, payload.last_name),
         Role.FAMILIAR,
     )
-    users.add_profile(
-        UserProfile(
-            uid=uid,
-            first_name=payload.first_name,
-            last_name=payload.last_name,
-            email=payload.email,
-            role=Role.FAMILIAR,
-        )
-    )
+    await run_in_threadpool(_persist_family, uid, payload, users)
 
     request_client = client if client is not None else httpx.AsyncClient(timeout=10.0)
     should_close_client = client is None
@@ -581,20 +573,25 @@ def create_adult(
         _display_name(payload.first_name, payload.last_name),
         Role.ADULTO_MAYOR,
     )
-    profile = users.add_profile(
-        UserProfile(
-            uid=uid,
-            first_name=payload.first_name,
-            last_name=payload.last_name,
-            email=payload.email,
-            role=Role.ADULTO_MAYOR,
-            phone=payload.phone,
-            birth_date=payload.birth_date,
-            address=payload.address,
-            photo_url=payload.photo_url,
+    try:
+        profile = users.add_profile(
+            UserProfile(
+                uid=uid,
+                first_name=payload.first_name,
+                last_name=payload.last_name,
+                email=payload.email,
+                role=Role.ADULTO_MAYOR,
+                phone=payload.phone,
+                birth_date=payload.birth_date,
+                address=payload.address,
+                photo_url=payload.photo_url,
+            )
         )
-    )
-    users.link_adult(family.uid, uid, Role.FAMILIAR)
+        users.link_adult(family.uid, uid, Role.FAMILIAR)
+    except Exception:
+        # Compensación (D-R3-15): sin perfil ni vínculo, la cuenta nueva no queda viva.
+        _delete_new_firebase_user(uid)
+        raise
     return _adult_response(profile)
 
 
@@ -626,8 +623,7 @@ async def create_caregiver(
     """
     _require_role(family, Role.FAMILIAR)
 
-    link = users.link_of(family.uid, adult_id)
-    if link is None or link.role != Role.FAMILIAR:
+    if not await run_in_threadpool(_is_responsible_family, family.uid, adult_id, users):
         raise AdultNotFoundError("El adulto mayor no existe.")
 
     existing = await run_in_threadpool(find_firebase_user_by_email, payload.email)
@@ -635,11 +631,9 @@ async def create_caregiver(
         caregiver_uid, caregiver_role = existing
         if caregiver_role != Role.CUIDADOR:
             raise EmailAlreadyExistsError("El correo ya está registrado.")
-        profile = users.get_profile(caregiver_uid)
-        if profile is None:
-            profile = users.add_profile(_caregiver_profile(caregiver_uid, payload))
-        users.link_adult(caregiver_uid, adult_id, Role.CUIDADOR, payload.permissions)
-        return _caregiver_response(profile, adult_id, payload, users)
+        return await run_in_threadpool(
+            _link_existing_caregiver, caregiver_uid, adult_id, payload, users
+        )
 
     caregiver_uid = await run_in_threadpool(
         create_firebase_user,
@@ -648,8 +642,9 @@ async def create_caregiver(
         _display_name(payload.first_name, payload.last_name),
         Role.CUIDADOR,
     )
-    profile = users.add_profile(_caregiver_profile(caregiver_uid, payload))
-    users.link_adult(caregiver_uid, adult_id, Role.CUIDADOR, payload.permissions)
+    profile = await run_in_threadpool(
+        _persist_new_caregiver, caregiver_uid, adult_id, payload, users
+    )
 
     try:
         await send_password_reset_email(payload.email, client=client)
@@ -659,7 +654,9 @@ async def create_caregiver(
             type(error).__name__,
         )
 
-    return _caregiver_response(profile, adult_id, payload, users)
+    return await run_in_threadpool(
+        _caregiver_response, profile, adult_id, payload, users
+    )
 
 
 def update_profile(
@@ -787,6 +784,85 @@ def _delete_firebase_user_quietly(uid: str, firebase_app: object) -> None:
             uid,
             type(error).__name__,
         )
+
+
+def _delete_new_firebase_user(uid: str) -> None:
+    """Compensación (D-R3-15): borra una cuenta recién creada cuyo guardado falló.
+
+    Nunca lanza, para que el llamador relance la excepción original. Solo se usa con
+    cuentas creadas en la misma petición, nunca con un cuidador que ya existía.
+    """
+    try:
+        _delete_firebase_user_quietly(uid, get_firebase_app())
+    except Exception as error:
+        logger.error(
+            "No se pudo borrar la cuenta %s tras un fallo al guardarla (%s)",
+            uid,
+            type(error).__name__,
+        )
+
+
+def _persist_family(uid: str, payload: RegisterRequest, users: UserRepository) -> None:
+    """A4: perfil del familiar recién creado; si falla, borra la cuenta y relanza.
+
+    Síncrona: desde register_family va por run_in_threadpool (D-R3-15).
+    """
+    try:
+        users.add_profile(
+            UserProfile(
+                uid=uid,
+                first_name=payload.first_name,
+                last_name=payload.last_name,
+                email=payload.email,
+                role=Role.FAMILIAR,
+            )
+        )
+    except Exception:
+        _delete_new_firebase_user(uid)
+        raise
+
+
+def _is_responsible_family(family_uid: str, adult_id: str, users: UserRepository) -> bool:
+    """A9: el familiar es el responsable del adulto. Síncrona (run_in_threadpool)."""
+    link = users.link_of(family_uid, adult_id)
+    return link is not None and link.role == Role.FAMILIAR
+
+
+def _link_existing_caregiver(
+    caregiver_uid: str,
+    adult_id: str,
+    payload: CaregiverCreateRequest,
+    users: UserRepository,
+) -> CaregiverResponse:
+    """A9 con un cuidador que ya existe: perfil si falta, vínculo y respuesta.
+
+    Sin compensación: la cuenta ya existía y nunca se borra. Síncrona
+    (run_in_threadpool, D-R3-15).
+    """
+    profile = users.get_profile(caregiver_uid)
+    if profile is None:
+        profile = users.add_profile(_caregiver_profile(caregiver_uid, payload))
+    users.link_adult(caregiver_uid, adult_id, Role.CUIDADOR, payload.permissions)
+    return _caregiver_response(profile, adult_id, payload, users)
+
+
+def _persist_new_caregiver(
+    caregiver_uid: str,
+    adult_id: str,
+    payload: CaregiverCreateRequest,
+    users: UserRepository,
+) -> UserProfile:
+    """A9 con un cuidador nuevo: perfil y vínculo; si fallan, borra la cuenta y relanza.
+
+    Síncrona: va por run_in_threadpool (D-R3-15).
+    """
+    try:
+        profile = users.add_profile(_caregiver_profile(caregiver_uid, payload))
+        users.link_adult(caregiver_uid, adult_id, Role.CUIDADOR, payload.permissions)
+    except Exception:
+        _delete_new_firebase_user(caregiver_uid)
+        raise
+    return profile
 
 
 def _firebase_error_code(response: httpx.Response) -> str:

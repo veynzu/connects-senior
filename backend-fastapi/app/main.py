@@ -12,15 +12,52 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import DataError, SQLAlchemyError
+from starlette.concurrency import run_in_threadpool
 
 from app.api.auth_router import router as auth_router
 from app.core import scheduler
 from app.core.config import get_settings
 from app.core.firebase import ensure_emulator_not_leaking
+from app.db import session as db_session
+
+
+logger = logging.getLogger(__name__)
+
+DATABASE_UNAVAILABLE_DETAIL = "El servicio no está disponible. Intenta más tarde."
+DATABASE_DATA_ERROR_DETAIL = "Datos inválidos: cuerpo: no es válido"
+DATABASE_INTERNAL_ERROR_DETAIL = "Error interno. Intenta más tarde."
+
+
+async def _open_database() -> db_session.Database | None:
+    """Comprueba la base al arrancar si DATABASE_URL es PostgreSQL (D-R3-16).
+
+    La URL se lee en tiempo de ejecución con get_settings(), nunca de la variable de módulo
+    `settings` (evaluada al importar). Si la base no responde, check_database lanza un
+    RuntimeError sin la URL ni la causa y el arranque falla.
+    """
+    if not db_session.is_postgres_url(get_settings().database_url):
+        logger.info("Persistencia: memoria")
+        return None
+    database = db_session.get_database()
+    try:
+        await run_in_threadpool(db_session.check_database, database)
+    except BaseException:
+        await _close_database(database)
+        raise
+    logger.info("Persistencia: PostgreSQL")
+    return database
+
+
+async def _close_database(database: db_session.Database | None) -> None:
+    engine = database.engine if database is not None else None
+    if engine is not None:
+        await run_in_threadpool(engine.dispose)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    database = await _open_database()
     # Planificador en proceso (P10, D-R2-6). Se llama por el módulo para que los
     # tests puedan sustituir scheduler.scheduler_loop.
     stop_event = asyncio.Event()
@@ -34,6 +71,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         scheduler_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await scheduler_task
+        await _close_database(database)
 
 
 app = FastAPI(
@@ -108,6 +146,49 @@ async def validation_exception_handler(
         for error in exc.errors()
     )
     return JSONResponse(status_code=422, content={"detail": f"Datos inválidos: {details}"})
+
+
+# --- Errores de la base de datos (D-R3-20) ---
+# Handlers globales documentados junto al de D-03: 503 para DATABASE_UNAVAILABLE_ERRORS,
+# 422 para DataError y 500 para el resto de SQLAlchemyError (sin este último, un
+# IntegrityError imprevisto dejaría a uvicorn registrar la traza con el DETAIL de Postgres,
+# que puede traer correos). Starlette elige el handler de la clase más cercana en el MRO de
+# la excepción, así que el de SQLAlchemyError solo recibe lo que no cubren los otros dos.
+# Solo se registra el tipo de la excepción y, si Postgres lo informa, el nombre de la
+# restricción: el texto de la excepción trae la sentencia SQL y la causa del driver.
+
+
+def _database_error_summary(exc: Exception) -> str:
+    """Tipo de la excepción y, si existe, la restricción violada; nunca su texto ni su causa."""
+    name = type(exc).__name__
+    diag = getattr(getattr(exc, "orig", None), "diag", None)
+    constraint = getattr(diag, "constraint_name", None)
+    if isinstance(constraint, str) and constraint:
+        return f"{name}, restricción {constraint}"
+    return name
+
+
+async def database_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.error("La base de datos no respondió (%s)", _database_error_summary(exc))
+    return JSONResponse(status_code=503, content={"detail": DATABASE_UNAVAILABLE_DETAIL})
+
+
+async def database_data_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.warning("La base de datos rechazó un dato (%s)", _database_error_summary(exc))
+    return JSONResponse(status_code=422, content={"detail": DATABASE_DATA_ERROR_DETAIL})
+
+
+async def database_internal_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.error(
+        "La base de datos falló de forma inesperada (%s)", _database_error_summary(exc)
+    )
+    return JSONResponse(status_code=500, content={"detail": DATABASE_INTERNAL_ERROR_DETAIL})
+
+
+for _database_error in db_session.DATABASE_UNAVAILABLE_ERRORS:
+    app.add_exception_handler(_database_error, database_unavailable_handler)
+app.add_exception_handler(DataError, database_data_error_handler)
+app.add_exception_handler(SQLAlchemyError, database_internal_error_handler)
 
 
 @app.get("/")

@@ -12,6 +12,7 @@ from app.repositories.contact_repository import (
 from app.repositories.user_repository import UserRepository, get_user_repository
 from app.services.contact_service import (
     ContactNotFoundError,
+    ContactOrderInUseError,
     ContactPermissionDeniedError,
     create_contact,
     delete_contact,
@@ -21,6 +22,10 @@ from app.services.contact_service import (
 
 
 CONTACT_NOT_FOUND_DETAIL = "El contacto no existe."
+# Índice único de favoritos en PostgreSQL (plan ronda 3, D-R3-7; AV-09b).
+CONTACT_ORDER_IN_USE_DETAIL = (
+    "Datos inválidos: favorite_order: ya está en uso por otro contacto"
+)
 
 router = APIRouter()
 
@@ -51,6 +56,8 @@ def create_adult_contact(
         return create_contact(user, adult_uid, payload, contacts, users)
     except ContactPermissionDeniedError as error:
         raise _forbidden() from error
+    except ContactOrderInUseError as error:
+        raise _order_in_use() from error
 
 
 @router.patch("/{contact_id}", response_model=Contact)
@@ -67,6 +74,8 @@ def update_adult_contact(
         raise _not_found() from error
     except ContactPermissionDeniedError as error:
         raise _forbidden() from error
+    except ContactOrderInUseError as error:
+        raise _order_in_use() from error
 
 
 @router.delete(
@@ -101,4 +110,11 @@ def _forbidden() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail=FORBIDDEN_DETAIL,
+    )
+
+
+def _order_in_use() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=CONTACT_ORDER_IN_USE_DETAIL,
     )

@@ -34,11 +34,13 @@ NO_CAREGIVER_PERMISSIONS = CaregiverPermissions(
 
 @dataclass
 class UserProfile:
+    """Perfil del usuario; role es None si no tiene rol reflejado (D-R3-5)."""
+
     uid: str
     first_name: str
     last_name: str
     email: str
-    role: Role
+    role: Role | None
     phone: str | None = None
     birth_date: date | None = None
     address: str | None = None

@@ -15,7 +15,9 @@ No conoce FastAPI: lanza excepciones de dominio que el router traduce.
 Concurrencia (D-R2-23): cada secuencia leer -> modificar -> escribir de H4, H5 y
 del escalamiento va dentro de _LOCK; dentro del lock no se hace red (las push se
 envían fuera, con los datos ya calculados). Una push que falla nunca hace fallar
-la acción principal (push_service.notify_users nunca lanza).
+la acción principal (push_service.notify_users nunca lanza). D-R3-23: tampoco un
+fallo al resolver los destinatarios (con la base real hace red) después de guardar
+la solicitud o la ronda: se registra solo el tipo de la excepción.
 """
 import logging
 import threading
@@ -195,18 +197,39 @@ def create_alert(
     # Siempre con el registro que devolvió add() (D-R2-17).
     body = _push_body(record)
     data = _push_data(record)
-    recipients = alert_recipients(record, contacts, users)
-    if recipients:
-        push_service.notify_users(recipients, ALERT_PUSH_TITLE, body, data, devices)
-    if not record.has_trusted_contacts or not push_service.reachable_uids(
-        recipients, devices
-    ):
-        # RF-26 y regla derivada P9: sin contactos de confianza o sin ningún
-        # destinatario alcanzable, también el familiar responsable.
-        family_uid = users.responsible_family_of(record.adult_uid)
-        if family_uid is not None and family_uid not in recipients:
+    # D-R3-23: la solicitud ya está guardada. Con la base real, resolver destinatarios
+    # hace red; un fallo ahí (o en el envío) se registra y nunca convierte la respuesta
+    # en error (el front reintentaría y duplicaría la solicitud).
+    recipients: list[str] = []
+    # RF-26 y regla derivada P9: sin contactos de confianza o sin ningún destinatario
+    # alcanzable, también el familiar responsable.
+    notify_family = not record.has_trusted_contacts
+    try:
+        recipients = alert_recipients(record, contacts, users)
+        if recipients:
             push_service.notify_users(
-                [family_uid], ALERT_PUSH_TITLE, body, data, devices
+                recipients, ALERT_PUSH_TITLE, body, data, devices
+            )
+        if not notify_family:
+            notify_family = not push_service.reachable_uids(recipients, devices)
+    except Exception as error:
+        # Sin saber si hubo destinatarios alcanzables, se avisa al familiar responsable.
+        notify_family = True
+        logger.error(
+            "No se pudo avisar a los destinatarios de la solicitud de ayuda (%s)",
+            type(error).__name__,
+        )
+    if notify_family:
+        try:
+            family_uid = users.responsible_family_of(record.adult_uid)
+            if family_uid is not None and family_uid not in recipients:
+                push_service.notify_users(
+                    [family_uid], ALERT_PUSH_TITLE, body, data, devices
+                )
+        except Exception as error:
+            logger.error(
+                "No se pudo avisar al familiar responsable de la solicitud de ayuda (%s)",
+                type(error).__name__,
             )
 
     return AlertCreateResponse(
@@ -351,10 +374,25 @@ def escalate_pending_alerts(
             )
             if stored is None:
                 continue
-            uids = alert_recipients(stored, contacts, users)
-            family_uid = users.responsible_family_of(stored.adult_uid)
-            if family_uid is not None and family_uid not in uids:
-                uids.append(family_uid)
+            # D-R3-23: la ronda ya está guardada; un fallo al resolver destinatarios
+            # (red con la base real) se registra, no corta el tick y la ronda cuenta.
+            uids: list[str] = []
+            try:
+                uids = alert_recipients(stored, contacts, users)
+            except Exception as error:
+                logger.error(
+                    "No se pudieron resolver los destinatarios del reenvío (%s)",
+                    type(error).__name__,
+                )
+            try:
+                family_uid = users.responsible_family_of(stored.adult_uid)
+                if family_uid is not None and family_uid not in uids:
+                    uids.append(family_uid)
+            except Exception as error:
+                logger.error(
+                    "No se pudo resolver el familiar responsable del reenvío (%s)",
+                    type(error).__name__,
+                )
             to_notify.append((stored, uids))
 
     # Fuera del lock: la push hace red.
@@ -364,7 +402,13 @@ def escalate_pending_alerts(
             stored.id,
             stored.notification_round,
         )
-        push_service.notify_users(
-            uids, ALERT_PUSH_TITLE, _push_body(stored), _push_data(stored), devices
-        )
+        try:
+            push_service.notify_users(
+                uids, ALERT_PUSH_TITLE, _push_body(stored), _push_data(stored), devices
+            )
+        except Exception as error:
+            logger.error(
+                "No se pudo enviar el reenvío de la solicitud de ayuda (%s)",
+                type(error).__name__,
+            )
     return len(to_notify)
