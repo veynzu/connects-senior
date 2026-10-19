@@ -4,18 +4,19 @@ import { Event, NavigationEnd, Router, RouterOutlet } from '@angular/router';
 import { filter, map } from 'rxjs';
 
 import { Auth } from './core/auth';
+import { AvisoNotificaciones } from './shared/aviso-notificaciones';
 import { CampanaNotificaciones } from './shared/campana-notificaciones';
 
 /**
- * Pantallas sin cabecera superior: las de entrar o crear cuenta, la prueba de conexión y la
- * llamada en curso (salir de ella desde la campana dejaría la llamada sin cerrar).
+ * Pantallas sin cabecera superior: las de entrar o crear cuenta, la prueba de conexión y las
+ * llamadas (salir de ellas desde la campana dejaría la llamada sin cerrar).
  */
 const RUTAS_SIN_CABECERA = ['/login', '/registro', '/recuperar', '/prueba-conexion'];
-const PREFIJOS_SIN_CABECERA = ['/llamada/'];
+const PREFIJOS_SIN_CABECERA = ['/llamada/', '/llamadas/entrante/'];
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, CampanaNotificaciones],
+  imports: [RouterOutlet, AvisoNotificaciones, CampanaNotificaciones],
   templateUrl: './app.html',
   styleUrl: './app.css',
 })
@@ -34,7 +35,10 @@ export class App {
     { initialValue: null },
   );
 
-  /** La cabecera con la campana se muestra en todas las pantallas con sesión. */
+  /**
+   * La cabecera con la campana (y el aviso para activar las notificaciones) se muestra en todas
+   * las pantallas con sesión.
+   */
   protected readonly mostrarCabecera = computed(() => {
     const ruta = this.ruta();
     if (!this.auth.usuario() || ruta === null) {

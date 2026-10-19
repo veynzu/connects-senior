@@ -12,7 +12,9 @@ import { provideServiceWorker } from '@angular/service-worker';
 import { routes } from './app.routes';
 import { Auth } from './core/auth';
 import { authInterceptor } from './core/auth-interceptor';
+import { LlamadasEntrantes } from './core/llamadas-entrantes';
 import { Notificaciones } from './core/notificaciones';
+import { Push } from './core/push';
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -22,10 +24,13 @@ export const appConfig: ApplicationConfig = {
     provideAppInitializer(() => {
       inject(Auth).recuperarUsuario();
       inject(Notificaciones).iniciar();
+      inject(Push).iniciar();
+      inject(LlamadasEntrantes).iniciar();
     }),
     provideServiceWorker('ngsw-worker.js', {
       enabled: !isDevMode(),
-      registrationStrategy: 'registerWhenStable:30000',
+      // Inmediato: las notificaciones push necesitan el service worker activo desde el inicio.
+      registrationStrategy: 'registerImmediately',
     }),
   ],
 };

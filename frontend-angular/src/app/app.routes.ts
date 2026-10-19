@@ -14,6 +14,7 @@ import { RegistrarAdulto } from './features/auth/registrar-adulto';
 import { Registro } from './features/auth/registro';
 import { Historial } from './features/comunicacion/historial';
 import { Llamada } from './features/comunicacion/llamada';
+import { LlamadaEntrante } from './features/comunicacion/llamada-entrante';
 import { AgregarContacto } from './features/contactos/agregar-contacto';
 import { ContactosAdulto } from './features/contactos/contactos-adulto';
 import { DetalleContacto } from './features/contactos/detalle-contacto';
@@ -89,6 +90,13 @@ export const routes: Routes = [
   { path: 'contactos', component: MisContactos, canActivate: [authGuard] },
   { path: 'ayuda', component: SolicitarAyuda, canActivate: [authGuard] },
   { path: 'llamada/:id', component: Llamada, canActivate: [authGuard] },
+  /*
+   * La abre la notificación push de llamada entrante (la dirección la arma el backend).
+   * Sin authGuard a propósito: la pantalla no llama al backend (la credencial es el token de
+   * Daily.co que viaja en la dirección) y, con la sesión vencida, el guard mandaría al login y
+   * la llamada se perdería. Rechazar, Colgar y Volver van a la pantalla inicial, que sí la exige.
+   */
+  { path: 'llamadas/entrante/:id', component: LlamadaEntrante },
   { path: 'prueba-conexion', component: ConexionPrueba },
   { path: '', pathMatch: 'full', redirectTo: 'login' },
   { path: '**', redirectTo: 'login' },

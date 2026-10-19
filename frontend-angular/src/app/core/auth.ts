@@ -47,6 +47,9 @@ interface SesionGuardada {
 
 const CLAVE_SESION = 'connects-senior.sesion';
 
+/** Inicio del detail con que el backend responde 403 cuando el correo no está verificado. */
+export const PREFIJO_CORREO_SIN_VERIFICAR = 'Debes verificar tu correo';
+
 @Injectable({ providedIn: 'root' })
 export class Auth {
     private readonly http = inject(HttpClient);
@@ -59,6 +62,10 @@ export class Auth {
 
     readonly usuario = computed(() => this.sesion()?.usuario ?? null);
     readonly token = computed(() => this.sesion()?.idToken ?? null);
+
+    /** Aviso que muestra la pantalla de inicio de sesión (por ejemplo, verificar el correo). */
+    private readonly aviso = signal('');
+    readonly mensajeInicio = this.aviso.asReadonly();
 
     /** POST /api/auth/login */
     login(email: string, password: string): Observable<LoginResponse> {
@@ -73,6 +80,14 @@ export class Auth {
         return this.http
             .post<LoginResponse>(`${API_BASE_URL}/api/auth/register`, datos)
             .pipe(tap((respuesta) => this.guardarSesion(respuesta)));
+    }
+
+    /**
+     * POST /api/auth/register (contrato v1.0, A4) sin guardar la sesión: el backend no deja
+     * entrar hasta que la persona verifique su correo, así que después del registro se va al login.
+     */
+    registrarSinSesion(datos: DatosRegistro): Observable<LoginResponse> {
+        return this.http.post<LoginResponse>(`${API_BASE_URL}/api/auth/register`, datos);
     }
 
     /** POST /api/auth/password-reset (contrato v1.0, A5): responde 204 exista o no el correo. */
@@ -159,9 +174,21 @@ export class Auth {
         return true;
     }
 
-    cerrarSesion(): void {
+    /** Cierra la sesión y va al login; `aviso`, si viene, se muestra allí. */
+    cerrarSesion(aviso = ''): void {
+        if (aviso) {
+            this.aviso.set(aviso);
+        }
         this.limpiarSesion();
         this.router.navigateByUrl('/login');
+    }
+
+    avisarEnInicio(texto: string): void {
+        this.aviso.set(texto);
+    }
+
+    limpiarMensajeInicio(): void {
+        this.aviso.set('');
     }
 
     private guardarSesion(respuesta: LoginResponse): void {
