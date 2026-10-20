@@ -1,0 +1,75 @@
+CONNECTS SENIOR | AJUSTE DE PRUEBAS EN LOS TRES PROCESOS
+Fecha de preparacion: 2026-10-19
+
+1. QUE SE MODIFICO
+
+- frontend-angular/src/app/app.spec.ts:
+  Se elimino la asercion obsoleta que buscaba el texto 'Hello, frontend-angular'.
+  Ahora se valida el router-outlet real del componente raiz de la PWA.
+- frontend-angular/src/app/core/auth.spec.ts:
+  Pruebas de login, rechazo y recuperacion del acceso, simulando respuestas HTTP.
+- frontend-angular/src/app/features/contactos/contactos.spec.ts:
+  Pruebas del contrato REST de contactos, alcance por adulto y permisos enviados.
+- frontend-angular/src/app/features/ayuda/alertas.spec.ts:
+  Pruebas del contrato de solicitudes, ubicacion opcional y confirmacion de atencion.
+- frontend-angular/package.json:
+  Se agrego 'test:ci' para ejecutar las unitarias sin modo watch.
+- scripts/ejecutar_pruebas_windows.ps1:
+  Ejecutor conjunto para backend y frontend; guarda logs bajo docs/pruebas/evidencias/AUTOMATIZADAS/.
+
+No se modifico ningun endpoint FastAPI, modelo ORM, servicio, formulario ni esquema PostgreSQL.
+
+2. REQUISITOS PARA WINDOWS
+
+Node.js >= 24.12.0, Python 3.13, npm, dependencias instaladas.
+Para Angular (en frontend-angular):
+   node --version
+   npm ci
+Para FastAPI (en backend-fastapi):
+   py -3.13 -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   python -m pip install -r requirements.txt -c constraints.txt
+
+3. PROBAR EL FRONTEND POR SEPARADO
+
+   cd frontend-angular
+   npm run test:ci
+   npm run build -- --configuration development
+
+4. PROBAR EL BACKEND POR SEPARADO
+
+   cd backend-fastapi
+   .\.venv\Scripts\Activate.ps1
+   python ejecutar_pruebas_calidad.py --suite unitarias
+   python ejecutar_pruebas_calidad.py --suite sintaxis
+   python ejecutar_pruebas_calidad.py --suite ddl
+
+5. TODO EN UNA SOLA ORDEN DESDE LA RAIZ DEL REPOSITORIO
+
+   powershell -ExecutionPolicy Bypass -File .\scripts\ejecutar_pruebas_windows.ps1
+
+Se generan archivos .stdout.txt, .stderr.txt y resumen con estados APROBADO,
+NO_APROBADO o BLOQUEADO. El backend tambien genera XML JUnit y JSON con su runner.
+Si hay fallos, NO cambiar la logica de produccion ni los tests solo para que pasen.
+Revisar la causa y guardar la primera ejecucion y la revalidacion.
+
+6. ALCANCE Y LIMITACIONES
+
+- Las nuevas pruebas Angular usan HttpClientTesting y nunca llaman a servicios reales.
+- Las pruebas backend normales tienen FCM real y DB real bloqueadas mediante fixtures.
+- Las pruebas SQL (test_sql_*.py) requieren una rama Neon EXCLUSIVA de pruebas, no
+  deben ejecutarse sobre el proyecto compartido sin coordinarlo.
+- La interfaz y la operacion real de los tres procesos requieren ademas los CP manuales
+  y las pruebas de integracion con Firebase, FCM, Daily.co y PostgreSQL.
+- Las variables .env y los JSON de cuenta de servicio no se incluyen en esta entrega.
+- En el .gitignore original se excluye docs/ de los commits; conserva y entrega la
+  carpeta de evidencias mediante ZIP mientras el equipo acuerda versionarla.
+
+7. LIMITACIONES DE VALIDACION EN EL ENTORNO DE PREPARACION
+
+Se reviso sintacticamente el codigo Python y el DDL, y se comprobaron los endpoints.
+No se pudo ejecutar npm ci ni instalar firebase_admin aqui porque no hay acceso DNS
+al registro de paquetes. Por eso las 13 pruebas frontend nuevas/actualizadas deben
+ser confirmadas mediante npm run test:ci en tu Windows.
+El RAR que entregaste anteriormente contiene evidencia de 1214 tests backend aprobados
+antes de estos ajustes. Este paquete NO afirma que se hayan reejecutado ahora.
