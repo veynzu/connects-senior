@@ -1,6 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
-import { FormControl, ReactiveFormsModule, Validators } from '@angular/forms';
+import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 
 import { Auth } from '../../core/auth';
@@ -21,14 +21,14 @@ import { Auth } from '../../core/auth';
         </p>
         <a class="entrar" routerLink="/login">Volver a iniciar sesión</a>
       } @else {
-        <form (ngSubmit)="enviar()" novalidate>
+        <form [formGroup]="formulario" (ngSubmit)="enviar()" novalidate>
         <p class="nota"><span class="obligatorio" aria-hidden="true">*</span> Campo obligatorio</p>
           <div class="campo">
             <label for="correo">Correo electrónico <span class="obligatorio" aria-hidden="true">*</span></label>
             <input
               id="correo" aria-required="true"
               type="email"
-              [formControl]="correo"
+              formControlName="correo"
               autocomplete="email"
               inputmode="email"
               [attr.aria-invalid]="correo.invalid && correo.touched ? 'true' : null"
@@ -62,6 +62,12 @@ export class Recuperar {
         nonNullable: true,
         validators: [Validators.required, Validators.minLength(3), Validators.email],
     });
+
+    /**
+     * El <form> lleva [formGroup] para que (ngSubmit) exista: solo ReactiveFormsModule está
+     * importado y, sin esa directiva, el navegador hacía el envío nativo y recargaba la página.
+     */
+    protected readonly formulario = new FormGroup({ correo: this.correo });
 
     protected readonly cargando = signal(false);
     protected readonly enviado = signal(false);
