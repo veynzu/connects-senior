@@ -1,0 +1,35 @@
+CONNECTS SENIOR — AJUSTES DE PRUEBAS Y FRONTEND
+
+Se modifico la verificacion obsoleta del titulo ('Hello, frontend-angular')
+por una verificacion del router-outlet actual de la aplicacion.
+
+Se agregaron pruebas aisladas para los tres procesos:
+P1: autenticacion (3 casos nuevos).
+P2: contactos (4 casos nuevos).
+P3: alertas y ubicacion opcional (4 casos nuevos).
+App: creacion del componente + router-outlet (2 casos, uno corregido).
+TOTAL DE CASOS FRONTEND DISEÑADOS: 13.
+
+No se modificaron las funcionalidades de produccion del frontend ni del backend.
+No se cambiaron dependencias ni la version de Firebase/Angular.
+Los 1.214 tests de backend aprobados corresponden a evidencia historica
+anterior a esta correccion, incorporada en docs/pruebas/evidencias.
+
+VALIDACION REALIZADA EN EL ENTORNO DE PREPARACION:
+- Compilacion sintactica Python: correcta.
+- Validacion estatica del DDL V004: aprobada.
+- Sintaxis de las 4 especificaciones TypeScript: correcta.
+- Ejecucion Angular/Vitest y pytest completa: no repetida aqui por falta de
+  acceso DNS para instalar los paquetes requeridos; pendiente en Windows.
+
+PARA APLICAR EN TU CLON GITHUB SIN BORRAR VARIABLES/DEPENDENCIAS:
+1. Haz copia de seguridad o commit de tus cambios locales.
+2. Descomprime AJUSTES_SOLO_ARCHIVOS.zip sobre la raiz del repositorio
+   C:\Users\DELLPHOTO\Documents\GitHub\connects-senior.
+3. Usa INSTRUCCIONES_PRUEBAS_WINDOWS.txt para confirmar dependencias.
+4. Ejecuta desde la raiz: 
+   powershell -ExecutionPolicy Bypass -File .\scripts\ejecutar_pruebas_windows.ps1
+5. Comparte el resumen y los logs generados en docs/pruebas/evidencias/AUTOMATIZADAS.
+
+No reinstales el DDL sobre la base Neon existente. No ejecutes las pruebas
+SQL sin una rama PostgreSQL dedicada y la confirmacion expresa del comando.
