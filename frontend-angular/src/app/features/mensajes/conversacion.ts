@@ -1,6 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
-import { FormControl, ReactiveFormsModule, Validators } from '@angular/forms';
+import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 
 import { Auth } from '../../core/auth';
@@ -99,12 +99,12 @@ const MAXIMO_CARACTERES = 2000;
 
           <button type="button" class="entrar secundario" (click)="cargar()">Actualizar</button>
 
-          <form class="escribir" (ngSubmit)="enviar()" novalidate>
+          <form class="escribir" [formGroup]="formulario" (ngSubmit)="enviar()" novalidate>
             <label for="texto">Escribe tu mensaje</label>
             <input
               id="texto"
               type="text"
-              [formControl]="texto"
+              formControlName="texto"
               [attr.maxlength]="maximo"
               autocomplete="off"
             />
@@ -146,6 +146,12 @@ export class Conversacion {
       Validators.maxLength(MAXIMO_CARACTERES),
     ],
   });
+
+  /**
+   * El <form> lleva [formGroup] para que (ngSubmit) exista: solo ReactiveFormsModule está
+   * importado y, sin esa directiva, el navegador hacía el envío nativo y recargaba la página.
+   */
+  protected readonly formulario = new FormGroup({ texto: this.texto });
 
   constructor() {
     this.cargar();
